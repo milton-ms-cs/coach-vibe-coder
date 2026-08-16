@@ -20,6 +20,22 @@ The spec drives everything. Vague specs get clarifying questions or a draft with
 - Writes only `.html`/`.css`/`.js`-type files, max 8 per turn, top level or one folder deep, no absolute/`..` paths.
 - If the Codio files API is unavailable, the code is shown in chat for copy-paste instead.
 
+## Session log (for autograders)
+
+The coach maintains `.vibe-coder-log.json` in the student's workspace — hidden from the file tree by the leading dot and never fed into the LLM's context. It's a JSON array with one entry per coach session:
+
+```json
+{
+  "started": "2026-08-16T17:22:03Z", "updated": "...", "ended": "...",
+  "coachVersion": "1.4.0", "exchanges": 4,
+  "questions": ["Make me a space invaders game...", "..."],
+  "filesWritten": ["index.html", "style.css", "script.js"],
+  "writeFailures": 0, "filesLostToLengthLimit": 0
+}
+```
+
+Autograders can `json.load` it to see how the student used the coach. Note this is the **only** record of student questions: Codio's course coach-log export logs the `userPrompt` field, which is empty for messages-based coaches — full platform logs (see `codio-mcp/scripts/export_coach_logs.py`) contain system prompts and responses but blank user prompts.
+
 ## Development
 
 ```bash

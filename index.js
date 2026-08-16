@@ -5,7 +5,7 @@
 // HTML/CSS/JS files directly into the workspace -> students preview + refine.
 (async function(codioIDE, window) {
 
-  const VERSION = "1.3.0";
+  const VERSION = "1.4.0";
 
   const MAX_CONTEXT_CHARS = 40000;  // budget for spec + diagram + site context
   const MAX_FILE_READ = 12000;      // per-file read cap
@@ -309,7 +309,7 @@ The student says: ${initialInput}`;
         const p = pending[0];
         const contMessages = messages.concat([
           { "role": "assistant", "content": prose },
-          { "role": "user", "content": `Your last response got cut off before ${p} was finished, so ${p} was NOT saved. Resend ONLY ${p}, complete from its first line, in the ===FILE format — no other files, one short sentence of prose at most. If it was long, simplify the code so the whole file fits well within the length limit.` }
+          { "role": "user", "content": `Your last response got cut off before ${p} was finished, so ${p} was NOT saved. Resend ONLY ${p}, complete from its first line, in the ===FILE format — no other files, one short sentence of prose at most. IMPORTANT: the other files from your response WERE saved, so ${p} must stay consistent with them — keep every feature, element id, class, and function they reference. If you need to shorten, simplify logic inside functions; never drop features the other files expect.` }
         ]);
         const cont = parseFilesFromResponse((await askOnce(contMessages)).result);
         for (const f of cont.files) {
@@ -324,8 +324,9 @@ The student says: ${initialInput}`;
         report += `\n\n**Heads up:** ${pending.join(", ")} kept getting cut off by the response length limit and was NOT saved. Try: "make ${pending[0]} shorter and resend it".`;
       }
 
+      let res = { written: [], failed: [] };
       if (allFiles.length > 0) {
-        const res = await writeFiles(allFiles);
+        res = await writeFiles(allFiles);
         if (res.written.length > 0) {
           report += `\n\n**Files updated in your workspace:** ${res.written.join(", ")}\n\nOpen the preview to see your site!`;
         }
@@ -344,13 +345,55 @@ The student says: ${initialInput}`;
       // Keep the stubbed prose (not full file bodies) in history — the fresh
       // workspace context in messages[0] carries the current file state.
       messages.push({ "role": "assistant", "content": prose });
-      return true;
+      return { written: res.written, failed: res.failed, truncated: pending };
     } catch (e) {
       codioIDE.coachBot.write("Hmm, something went wrong on my end. Try asking that again!");
       messages.pop();
-      return false;
+      return null;
     } finally {
       codioIDE.coachBot.hideThinkingAnimation();
+    }
+  }
+
+  // ============================================================
+  // Session log — a hidden workspace file summarizing how the student used
+  // the coach, readable by autograders (JSON array, one entry per session).
+  // Dot-prefixed, so collectPaths() never feeds it back into the LLM context.
+  // Deliberately records the student's questions: Codio's own course coach-log
+  // export logs only the userPrompt field, which is empty for messages-based
+  // coaches like this one — this file is where the questions live.
+  // ============================================================
+
+  const SESSION_LOG_PATH = ".vibe-coder-log.json";
+  const MAX_LOGGED_SESSIONS = 20;
+  const MAX_LOGGED_QUESTIONS = 50;
+
+  async function loadSessionHistory() {
+    const F = codioIDE.files;
+    if (!F || typeof F.getContent !== "function") return [];
+    try {
+      const parsed = JSON.parse(await F.getContent(SESSION_LOG_PATH));
+      return Array.isArray(parsed) ? parsed.slice(-(MAX_LOGGED_SESSIONS - 1)) : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  async function saveSessionHistory(history) {
+    const F = codioIDE.files;
+    if (!F || typeof F.add !== "function") return;
+    const text = JSON.stringify(history, null, 2);
+    try {
+      await F.add(SESSION_LOG_PATH, text);
+    } catch (e) {
+      // add() rejects when the file exists — delete and re-add
+      try {
+        if (typeof F.deleteFiles !== "function") return;
+        await F.deleteFiles([SESSION_LOG_PATH]);
+        await F.add(SESSION_LOG_PATH, text);
+      } catch (e2) {
+        // Logging must never break the coach
+      }
     }
   }
 
@@ -381,8 +424,38 @@ The student says: ${initialInput}`;
       break;
     }
 
+    const history = await loadSessionHistory();
+    const session = {
+      started: new Date().toISOString(),
+      updated: null,
+      ended: null,
+      coachVersion: VERSION,
+      exchanges: 0,
+      questions: [],
+      filesWritten: [],
+      writeFailures: 0,
+      filesLostToLengthLimit: 0
+    };
+    history.push(session);
+
+    async function recordTurn(question, stats) {
+      session.exchanges += 1;
+      if (session.questions.length < MAX_LOGGED_QUESTIONS) {
+        session.questions.push(String(question).slice(0, 300));
+      }
+      if (stats) {
+        for (const p of stats.written) {
+          if (!session.filesWritten.includes(p)) session.filesWritten.push(p);
+        }
+        session.writeFailures += stats.failed.length;
+        session.filesLostToLengthLimit += stats.truncated.length;
+      }
+      session.updated = new Date().toISOString();
+      await saveSessionHistory(history);
+    }
+
     messages.push({ "role": "user", "content": await buildContextMessage(initialInput) });
-    await runTurn(messages);
+    await recordTurn(initialInput, await runTurn(messages));
 
     while (true) {
       let input;
@@ -412,13 +485,16 @@ The student says: ${initialInput}`;
         // Keep the previous context if the refresh fails
       }
 
-      await runTurn(messages);
+      await recordTurn(input, await runTurn(messages));
 
       // Keep first message (workspace + guide) + last 8 messages (4 exchanges)
       while (messages.length > 9) {
         messages.splice(1, 2); // drop the oldest user+assistant pair, keep messages[0] intact
       }
     }
+
+    session.ended = new Date().toISOString();
+    await saveSessionHistory(history);
 
     codioIDE.coachBot.write("You're welcome! Keep refining that spec — great specs make great sites.");
     codioIDE.coachBot.showMenu();
