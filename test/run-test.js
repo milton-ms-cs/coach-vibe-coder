@@ -88,7 +88,7 @@ Next, you could spec a footer!`;
   const state = { css: "h1 { color: red; }" };
   const filesApi = {
     async getStructure() {
-      return { "spec.md": 1, "wireframe.svg": 1, "style.css": 1, "logo.png": 1, ".git": { "c": 1 } };
+      return { "spec.md": 1, "wireframe.svg": 1, "style.css": 1, "logo.png": 1, "mockup.fig": 1, ".git": { "c": 1 } };
     },
     async getContent(p) {
       if (p === "spec.md") return "SPEC: a site about axolotls";
@@ -111,7 +111,8 @@ Next, you could spec a footer!`;
   const m0 = c.asks[0].messages[0].content;
   check("spec.md in context", m0.includes("SPEC: a site about axolotls"));
   check("svg text in context", m0.includes("Header goes here"));
-  check("binary flagged not read", m0.includes("logo.png") && m0.includes("NOT readable"));
+  check("png listed as usable asset", /Image assets[^\n]*logo\.png/.test(m0));
+  check("fig flagged design-only", /NOT readable[^\n]*mockup\.fig/.test(m0));
   check("dotdirs skipped", !m0.includes(".git"));
   check("guide included", m0.includes("GUIDE"));
   check("file written turn 1", c.added.some(a => a.path === "index.html" && a.content.includes("axolotls")));

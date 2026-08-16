@@ -5,7 +5,7 @@
 // HTML/CSS/JS files directly into the workspace -> students preview + refine.
 (async function(codioIDE, window) {
 
-  const VERSION = "1.2.0";
+  const VERSION = "1.3.0";
 
   const MAX_CONTEXT_CHARS = 40000;  // budget for spec + diagram + site context
   const MAX_FILE_READ = 12000;      // per-file read cap
@@ -15,7 +15,8 @@
   const SPEC_EXTS = [".md", ".txt"];
   const SVG_EXTS = [".svg"];
   const SITE_EXTS = [".html", ".css", ".js"];
-  const UNREADABLE_EXTS = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".fig", ".pdf"];
+  const IMAGE_EXTS = [".png", ".jpg", ".jpeg", ".gif", ".webp"];  // usable assets
+  const DESIGN_ONLY_EXTS = [".fig", ".pdf"];  // can neither read nor use
   const WRITABLE_EXTS = [".html", ".css", ".js", ".svg", ".md", ".txt"];
 
   const exitPhrases = ["thanks", "thank you", "bye", "done", "exit", "quit", "stop", "no thanks", "i'm good", "im good", "that's all", "thats all"];
@@ -34,7 +35,14 @@
 - Plain HTML, CSS, and JavaScript only — no frameworks, no build tools, no libraries or CDN scripts. A Google Fonts <link> is okay.
 - Multi-file sites: index.html + style.css (+ script.js when the spec needs behavior), connected with relative links.
 - Beginner-readable code: clear names, consistent indentation, and short comments explaining what each section does. An 8th grader should be able to open any file and follow along.
-- For images: if the workspace listing shows the student's own image files, reference them by relative path. Otherwise use CSS colors/shapes as placeholders. Never hotlink images from the internet.
+- Never hotlink images from the internet — only use image files that are in the workspace (see below).
+
+## Images and assets
+
+- The workspace listing shows any image files the student has uploaded. USE them (by relative path) wherever the spec calls for that visual. You can't see inside an image, so if a filename doesn't make its content obvious, ask the student what it shows.
+- Art source is part of the spec! Characters, creatures, and detailed sprites look rough when drawn from code. When the spec involves visuals like that, no matching image is in the workspace, and the spec doesn't say where the art comes from, make it one of your clarifying questions: "Want me to draw the squirrel with simple shapes, or will you upload an image of one?" A good spec says which.
+- If they choose images, tell them exactly what to upload: the filename to use (like squirrel.png), that a PNG with a transparent background works best, a rough size (like 50x50 for a game sprite), and that they can draw one free in a pixel editor like Piskel or use their own drawing or photo. Then use it by that filename. If they choose shapes (or don't say), build simple shapes — and you can still mention image uploads as a later upgrade.
+- In canvas games, create each Image() once at the top and draw it with ctx.drawImage() inside the game loop — the loop redraws every frame, so the image appears as soon as it loads.
 
 ## Output format — STRICT
 
@@ -99,7 +107,8 @@ This is a middle school class. If a request is inappropriate, unkind toward a re
         if (SPEC_EXTS.includes(ext)) out.specs.push(full);
         else if (SVG_EXTS.includes(ext)) out.svgs.push(full);
         else if (SITE_EXTS.includes(ext)) out.site.push(full);
-        else if (UNREADABLE_EXTS.includes(ext)) out.unreadable.push(full);
+        else if (IMAGE_EXTS.includes(ext)) out.images.push(full);
+        else if (DESIGN_ONLY_EXTS.includes(ext)) out.designOnly.push(full);
       }
     }
     return out;
@@ -120,7 +129,7 @@ This is a middle school class. If a request is inappropriate, unkind toward a re
       return "The workspace could not be read (Codio files API unavailable). Ask the student to paste their spec and describe their design.";
     }
 
-    let paths = { specs: [], svgs: [], site: [], unreadable: [] };
+    let paths = { specs: [], svgs: [], site: [], images: [], designOnly: [] };
     try {
       collectPaths(await F.getStructure(), "", paths);
     } catch (e) {
@@ -145,8 +154,12 @@ This is a middle school class. If a request is inappropriate, unkind toward a re
       }
     }
 
-    if (paths.unreadable.length > 0) {
-      out += `\nDesign files present but NOT readable (binary): ${paths.unreadable.join(", ")}. If one matters, ask the student to export it as an SVG or describe it.\n`;
+    if (paths.images.length > 0) {
+      out += `\nImage assets the student has uploaded (you can't see inside them, but the site CAN use them by relative path): ${paths.images.join(", ")}\n`;
+    }
+
+    if (paths.designOnly.length > 0) {
+      out += `\nDesign files present but NOT readable (binary): ${paths.designOnly.join(", ")}. If one matters, ask the student to export it as an SVG or describe it.\n`;
     }
 
     if (!out) {

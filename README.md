@@ -6,8 +6,9 @@ A Codio Virtual Coach for Grade 8 tech that **builds websites from student desig
 
 1. Write a spec — in the chat, or better, in a `spec.md` / `.txt` file in the workspace.
 2. (Optional) Add a wireframe: in Figma, **export the frame as SVG** into the workspace. The coach reads SVG layout, shapes, and text labels. PNG/JPG/`.fig` files can't be read — the coach will ask for an SVG export or a description.
-3. Click **Vibe Coder** and say what to build. The coach writes `index.html` / `style.css` / `script.js` (plain HTML/CSS/JS, beginner-readable, commented) directly into the workspace.
-4. Open the Codio preview, then refine the spec and iterate.
+3. (Optional) Upload image assets — sprites, characters, photos (PNG with transparent background works best). The coach can't see inside them but uses them by filename. Art source is treated as part of the spec: when a spec involves characters or detailed visuals, the coach asks whether to draw them with simple shapes or use uploaded images (and recommends a free pixel editor like Piskel for sprites).
+4. Click **Vibe Coder** and say what to build. The coach writes `index.html` / `style.css` / `script.js` (plain HTML/CSS/JS, beginner-readable, commented) directly into the workspace.
+5. Open the Codio preview, then refine the spec and iterate.
 
 ## The pedagogy
 
