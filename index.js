@@ -5,10 +5,10 @@
 // HTML/CSS/JS files directly into the workspace -> students preview + refine.
 (async function(codioIDE, window) {
 
-  const VERSION = "1.5.1";
+  const VERSION = "1.5.2";
 
-  const MAX_CONTEXT_CHARS = 40000;  // budget for spec + diagram + site context
-  const MAX_FILE_READ = 12000;      // per-file read cap
+  const MAX_CONTEXT_CHARS = 20000;  // budget for spec + diagram + site context (resent every turn — keep lean)
+  const MAX_FILE_READ = 8000;       // per-file read cap
   const MAX_WRITE_FILES = 8;        // per-turn file write cap
   const MAX_CONTINUES = 2;          // extra asks to recover cut-off files
 
@@ -59,14 +59,16 @@ When you build or change files, output each COMPLETE file between marker lines, 
 - Before the files: 2-4 friendly sentences (middle school reading level) about what you built and how it follows their spec. After the files: suggest ONE specific thing they could spec next.
 - If you're only answering a question or asking for clarification, don't output any file blocks.
 
-## Keep builds SMALL — your response has a hard length limit
+## Split every build into small files — your response has a hard length limit
 
-If your response runs too long it gets cut off mid-file and the file is lost. So:
-- Keep every file under about 100 lines. Keep comments to one short line each. Keep prose brief.
-- If the JavaScript genuinely needs more than ~100 lines, split it into two or three smaller files by job (like setup.js and game.js) and load them in order with separate <script> tags — small files survive the length limit and are easier to resend. Don't split small sites; one script.js is easier for students to read.
-- Build the SIMPLEST version that matches the spec. If the spec implies a big build (like a full game), build a minimal working version first, say what you left out, and let the student spec the upgrades one at a time.
-- When changing an existing site, resend ONLY the files that change.
-- If you cannot fit all the files, send the complete ones, then say exactly: "NEXT FILES: name1, name2" so the student can ask you to continue.
+Your WHOLE response shares one length cap. If it runs over, the last file is cut off mid-line and lost. Small files are the defense: a small file is more likely to fit, and if one is cut off it can be resent on its own. So:
+- NEVER put a whole program in a single big script.js. Split the JavaScript BY JOB into small files loaded in order with their own <script> tags. A canvas game is typically: input.js (controls + game state), game.js (update, spawn, collisions), draw.js (rendering + the game loop). A page with little behavior needs no JS or one small script.js.
+- Keep EVERY file under about 60 lines, with one short comment per section. If a file is heading past that, split it further by job — don't let any single file grow large.
+- Split by JOB, not per function. 2-4 files is right; a dozen tiny files is not. Files share globals (plain <script> tags, no modules), so fewer, job-sized files stay consistent more easily.
+- Order the <script> tags so each file's functions/variables are defined before another file uses them (e.g. input.js, then game.js, then draw.js).
+- index.html and style.css are always their own files.
+- Build the SIMPLEST version that matches the spec first. If the spec implies a big build (like a full game), build a minimal working version, say what you left out, and let the student spec upgrades one at a time.
+- When changing an existing site, resend ONLY the files that change — and keep them consistent with the files you're NOT resending (same element ids, classes, and function names).
 
 ## Workspace context
 
@@ -122,8 +124,22 @@ This is a middle school class. If a request is inappropriate, unkind toward a re
     return content.slice(0, maxLen) + "\n...(truncated)";
   }
 
+  // Drop the assignment's own README.md from the spec list when the student has
+  // real spec docs too — otherwise the (often long) README is re-embedded in
+  // context every turn as if it were the spec. Keep it if it's the ONLY doc, in
+  // case a student actually wrote their spec there.
+  function dropRedundantReadme(specs) {
+    if (specs.length <= 1) return specs;
+    const filtered = specs.filter(p => !/(^|\/)readme\.md$/i.test(p));
+    return filtered.length > 0 ? filtered : specs;
+  }
+
   // Build the <workspace> text block: specs, SVG designs, current site files.
-  async function gatherWorkspaceText() {
+  // opts.includeSite=false omits the current-site-files section — used for the
+  // truncation-recovery ask, where companionFilesBlock() already carries the
+  // just-built files, so resending the whole site would be redundant.
+  async function gatherWorkspaceText(opts) {
+    const includeSite = !opts || opts.includeSite !== false;
     const F = codioIDE.files;
     if (!F || typeof F.getStructure !== "function" || typeof F.getContent !== "function") {
       return "The workspace could not be read (Codio files API unavailable). Ask the student to paste their spec and describe their design.";
@@ -135,13 +151,16 @@ This is a middle school class. If a request is inappropriate, unkind toward a re
     } catch (e) {
       return "The workspace could not be read. Ask the student to paste their spec and describe their design.";
     }
+    paths.specs = dropRedundantReadme(paths.specs);
 
     let out = "";
     const sections = [
       ["Spec / design documents", paths.specs],
       ["SVG design exports (read the shapes and text to understand the layout)", paths.svgs],
-      ["Current site files", paths.site],
     ];
+    if (includeSite) {
+      sections.push(["Current site files", paths.site]);
+    }
     for (const [label, list] of sections) {
       for (const p of list) {
         if (out.length >= MAX_CONTEXT_CHARS) break;
@@ -250,10 +269,10 @@ This is a middle school class. If a request is inappropriate, unkind toward a re
 
   // Build the context-bearing first message from a fresh read. Re-run before
   // every ask() so the coach sees the student's latest spec and site edits.
-  async function buildContextMessage(initialInput) {
+  async function buildContextMessage(initialInput, opts) {
     const context = await codioIDE.coachBot.getContext();
 
-    const workspaceText = await gatherWorkspaceText();
+    const workspaceText = await gatherWorkspaceText(opts);
 
     const guideContent = (context.guidesPage && context.guidesPage.content)
       ? context.guidesPage.content
@@ -309,7 +328,7 @@ The student says: ${initialInput}`;
   }
 
   // One generate -> parse -> (recover cut-off files) -> write -> report turn.
-  async function runTurn(messages) {
+  async function runTurn(messages, initialInput) {
     try {
       codioIDE.coachBot.showThinkingAnimation();
       const result = await askOnce(messages);
@@ -323,8 +342,21 @@ The student says: ${initialInput}`;
       // exchanges stay local — they are never added to the real history.
       let pending = parsed.truncated;
       let tries = 0;
+      // Recovery asks reuse a SLIM first message (spec + guide, no current-site
+      // files): companionFilesBlock() below already carries the just-built files
+      // verbatim, so resending the whole site would be redundant — and this whole
+      // block goes out on every recovery ask. Built lazily, only if truncation
+      // actually happens; falls back to the full context if the rebuild fails.
+      let slimFirst = null;
       while (pending.length > 0 && tries < MAX_CONTINUES) {
         tries++;
+        if (slimFirst === null) {
+          try {
+            slimFirst = { "role": "user", "content": await buildContextMessage(initialInput, { includeSite: false }) };
+          } catch (e) {
+            slimFirst = messages[0];
+          }
+        }
         const p = pending[0];
         // Show the recovery model the files that DID save this turn (verbatim),
         // so the resend wires into their real ids/controls instead of inventing
@@ -338,7 +370,7 @@ The student says: ${initialInput}`;
         const matchNote = saved
           ? ` It MUST match the saved files above: use the EXACT element ids, classes, and function names they define — do NOT invent new ones (no #startBtn or #score element the HTML doesn't have) — and wire up every control and element they contain (if the HTML says "press SPACEBAR", start on SPACEBAR; if it mentions mouse control, add a mousemove handler).`
           : "";
-        const contMessages = messages.concat([
+        const contMessages = [slimFirst].concat(messages.slice(1)).concat([
           { "role": "assistant", "content": prose },
           { "role": "user", "content": `Your last response got cut off before ${p} was finished, so ${p} was NOT saved. ${savedNote}Resend ONLY ${p}, complete from its first line, in the ===FILE format — no other files, one short sentence of prose at most.${matchNote} If you need to shorten, simplify logic inside functions; never drop features the ${saved ? "saved files above" : "other files"} expect.` }
         ]);
@@ -430,6 +462,19 @@ The student says: ${initialInput}`;
     }
   }
 
+  // Never block the conversation on a log write. saveSessionHistory() is a full
+  // read-modify-rewrite (deleteFiles + add) of the shared log; awaiting it in the
+  // turn loop means a stalled file write freezes the coach with no input box (the
+  // "logging must never break the coach" comment above was true for THROWS but not
+  // for a HANG). queueSave() serializes writes on a promise chain — so overlapping
+  // fire-and-forget saves can't corrupt the file — and is called WITHOUT await each
+  // turn; only the end-of-session save is awaited (nothing follows it).
+  let saveChain = Promise.resolve();
+  function queueSave(history) {
+    saveChain = saveChain.then(function() { return saveSessionHistory(history); }).catch(function() {});
+    return saveChain;
+  }
+
   codioIDE.coachBot.register("vibeCoder", "Vibe Coder", onButtonPress);
 
   async function onButtonPress() {
@@ -485,11 +530,11 @@ The student says: ${initialInput}`;
         session.filesLostToLengthLimit += stats.truncated.length;
       }
       session.updated = new Date().toISOString();
-      await saveSessionHistory(history);
+      queueSave(history); // fire-and-forget: never block the input loop on a log write
     }
 
     messages.push({ "role": "user", "content": await buildContextMessage(initialInput) });
-    await recordTurn(initialInput, await runTurn(messages));
+    await recordTurn(initialInput, await runTurn(messages, initialInput));
 
     while (true) {
       let input;
@@ -519,7 +564,7 @@ The student says: ${initialInput}`;
         // Keep the previous context if the refresh fails
       }
 
-      await recordTurn(input, await runTurn(messages));
+      await recordTurn(input, await runTurn(messages, initialInput));
 
       // Keep first message (workspace + guide) + last 8 messages (4 exchanges)
       while (messages.length > 9) {
@@ -528,7 +573,7 @@ The student says: ${initialInput}`;
     }
 
     session.ended = new Date().toISOString();
-    await saveSessionHistory(history);
+    await queueSave(history); // flush everything queued this session (safe to await — no input follows)
 
     codioIDE.coachBot.write("You're welcome! Keep refining that spec — great specs make great sites.");
     codioIDE.coachBot.showMenu();

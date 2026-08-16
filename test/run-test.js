@@ -88,10 +88,11 @@ Next, you could spec a footer!`;
   const state = { css: "h1 { color: red; }" };
   const filesApi = {
     async getStructure() {
-      return { "spec.md": 1, "wireframe.svg": 1, "style.css": 1, "logo.png": 1, "mockup.fig": 1, ".git": { "c": 1 } };
+      return { "spec.md": 1, "README.md": 1, "wireframe.svg": 1, "style.css": 1, "logo.png": 1, "mockup.fig": 1, ".git": { "c": 1 } };
     },
     async getContent(p) {
       if (p === "spec.md") return "SPEC: a site about axolotls";
+      if (p === "README.md") return "ASSIGNMENT_README should be skipped";
       if (p === "wireframe.svg") return "<svg><text>Header goes here</text></svg>";
       if (p === "style.css") return state.css;
       throw new Error("unreadable");
@@ -110,6 +111,7 @@ Next, you could spec a footer!`;
 
   const m0 = c.asks[0].messages[0].content;
   check("spec.md in context", m0.includes("SPEC: a site about axolotls"));
+  check("assignment README skipped when a real spec exists", !m0.includes("ASSIGNMENT_README"));
   check("svg text in context", m0.includes("Header goes here"));
   check("png listed as usable asset", /Image assets[^\n]*logo\.png/.test(m0));
   check("fig flagged design-only", /NOT readable[^\n]*mockup\.fig/.test(m0));
@@ -159,12 +161,22 @@ Next, you could spec a footer!`;
   const contResp = `Here it is complete.\n\n===FILE: script.js===\n// complete game logic\nconst canvas = document.getElementById("c");\n===END FILE===`;
   const build2b = `Done!\n\n===FILE: style.css===\nh1 { color: purple; }\n===END FILE===`;
   const fApi3 = {
-    async getStructure() { return {}; },
-    async getContent() { throw new Error("none"); },
+    async getStructure() { return { "plan.md": 1, "old.js": 1 }; },
+    async getContent(p) {
+      if (p === "plan.md") return "SPECDOC keep this";
+      if (p === "old.js") return "OLD_SITE_BODY drop from recovery";
+      throw new Error("none");
+    },
   };
   const { captured: c3 } = boot({ files: [], guidesPage: null, assignmentData: null }, fApi3, [truncResp, contResp, build2b]);
   await c3.cb();
   check("continuation ask happened", c3.asks.length === 3);
+  // Trim (v1.5.2): the recovery ask reuses a slim first message — spec/guide kept,
+  // current-site files dropped (companionFilesBlock already carries the just-built
+  // files, so resending the whole site every recovery ask was redundant).
+  check("initial ask includes current-site files", c3.asks[0].messages[0].content.includes("OLD_SITE_BODY"));
+  check("recovery ask drops current-site files", !c3.asks[1].messages[0].content.includes("OLD_SITE_BODY"));
+  check("recovery ask keeps the spec", c3.asks[1].messages[0].content.includes("SPECDOC"));
   const contReq = c3.asks[1].messages[c3.asks[1].messages.length - 1];
   check("continuation asks for just script.js", contReq.role === "user" && contReq.content.includes("Resend ONLY script.js"));
   // Regression (v1.5.1): the recovery ask must SHOW the saved index.html verbatim
@@ -206,6 +218,31 @@ Next, you could spec a footer!`;
   await c5.cb();
   check("existing file deleted then re-added", deleted.includes("style.css") && c5.added.some(a => a.path === "style.css" && a.content.includes("purple")));
   check("overwrite reported as success", c5.writes.some(t => t.includes("Files updated") && t.includes("style.css")));
+
+  // ---------- input loop survives a stalled log write (v1.5.2) ----------
+  // Regression for the "lost the ability to respond" bug: a .coach-log.json write
+  // that never resolves must NOT freeze the conversation. Per-turn saves are now
+  // fire-and-forget (queueSave), so both turns run even though every log write hangs.
+  console.log("log write never blocks the loop:");
+  {
+    const hang = {
+      async getStructure() { return {}; },
+      async getContent() { throw new Error("none"); },
+      async deleteFiles() {},
+    };
+    const { captured: cH } = boot({ files: [], guidesPage: null, assignmentData: null }, hang, [build1, build2b]);
+    const capAddH = hang.add; // boot installed a capturing add()
+    hang.add = (p, content) => {
+      capAddH(p, content);                                   // still record the write
+      if (p === ".coach-log.json") return new Promise(() => {}); // ...but the log write hangs forever
+      return Promise.resolve();
+    };
+    // cb() itself stays pending on the awaited end-of-session flush (post-loop, fine),
+    // so race it against a short timer and assert the loop still completed both turns.
+    await Promise.race([cH.cb(), new Promise(r => setTimeout(r, 800))]);
+    check("both turns ran despite a hanging log write",
+      cH.asks.length === 2 && cH.added.some(a => a.path === "index.html") && cH.added.some(a => a.path === "style.css"));
+  }
 
   console.log(failures === 0 ? "\nALL TESTS PASSED" : `\n${failures} FAILURE(S)`);
   process.exit(failures === 0 ? 0 : 1);
