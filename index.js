@@ -5,7 +5,7 @@
 // HTML/CSS/JS files directly into the workspace -> students preview + refine.
 (async function(codioIDE, window) {
 
-  const VERSION = "1.1.0";
+  const VERSION = "1.2.0";
 
   const MAX_CONTEXT_CHARS = 40000;  // budget for spec + diagram + site context
   const MAX_FILE_READ = 12000;      // per-file read cap
@@ -55,6 +55,7 @@ When you build or change files, output each COMPLETE file between marker lines, 
 
 If your response runs too long it gets cut off mid-file and the file is lost. So:
 - Keep every file under about 100 lines. Keep comments to one short line each. Keep prose brief.
+- If the JavaScript genuinely needs more than ~100 lines, split it into two or three smaller files by job (like setup.js and game.js) and load them in order with separate <script> tags — small files survive the length limit and are easier to resend. Don't split small sites; one script.js is easier for students to read.
 - Build the SIMPLEST version that matches the spec. If the spec implies a big build (like a full game), build a minimal working version first, say what you left out, and let the student spec the upgrades one at a time.
 - When changing an existing site, resend ONLY the files that change.
 - If you cannot fit all the files, send the complete ones, then say exactly: "NEXT FILES: name1, name2" so the student can ask you to continue.
