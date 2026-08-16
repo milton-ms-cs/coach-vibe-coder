@@ -5,7 +5,7 @@
 // HTML/CSS/JS files directly into the workspace -> students preview + refine.
 (async function(codioIDE, window) {
 
-  const VERSION = "1.5.0";
+  const VERSION = "1.5.1";
 
   const MAX_CONTEXT_CHARS = 40000;  // budget for spec + diagram + site context
   const MAX_FILE_READ = 12000;      // per-file read cap
@@ -289,6 +289,25 @@ The student says: ${initialInput}`;
     if (allFiles.length < MAX_WRITE_FILES) allFiles.push(f);
   }
 
+  // Render the files already completed this turn as ===FILE=== blocks, so a
+  // continuation ask for a cut-off file can be made consistent with them.
+  // Without this the recovery model is BLIND to the HTML it must wire into:
+  // messages[0]'s workspace snapshot predates this turn's writes (writeFiles
+  // runs after the continuation loop) and the stubbed prose hides the file
+  // bodies — so the model reinvents element ids/controls the saved HTML never
+  // had (observed live Aug 2026: a resent script.js referenced a #startBtn and
+  // #score that index.html lacked, throwing on load and killing the game).
+  function companionFilesBlock(allFiles, excludePath) {
+    let block = "";
+    for (const f of allFiles) {
+      if (f.path === excludePath) continue;
+      let body = f.content;
+      if (body.length > MAX_FILE_READ) body = body.slice(0, MAX_FILE_READ) + "\n...(truncated)";
+      block += `===FILE: ${f.path}===\n${body}\n===END FILE===\n`;
+    }
+    return block;
+  }
+
   // One generate -> parse -> (recover cut-off files) -> write -> report turn.
   async function runTurn(messages) {
     try {
@@ -307,9 +326,21 @@ The student says: ${initialInput}`;
       while (pending.length > 0 && tries < MAX_CONTINUES) {
         tries++;
         const p = pending[0];
+        // Show the recovery model the files that DID save this turn (verbatim),
+        // so the resend wires into their real ids/controls instead of inventing
+        // its own. messages[0]'s workspace snapshot predates these writes and
+        // the stubbed prose hides the bodies, so this is the only place the
+        // model can see them.
+        const saved = companionFilesBlock(allFiles, p);
+        const savedNote = saved
+          ? `The OTHER files from your response WERE already saved to the workspace exactly as shown here:\n${saved}\n`
+          : "";
+        const matchNote = saved
+          ? ` It MUST match the saved files above: use the EXACT element ids, classes, and function names they define — do NOT invent new ones (no #startBtn or #score element the HTML doesn't have) — and wire up every control and element they contain (if the HTML says "press SPACEBAR", start on SPACEBAR; if it mentions mouse control, add a mousemove handler).`
+          : "";
         const contMessages = messages.concat([
           { "role": "assistant", "content": prose },
-          { "role": "user", "content": `Your last response got cut off before ${p} was finished, so ${p} was NOT saved. Resend ONLY ${p}, complete from its first line, in the ===FILE format — no other files, one short sentence of prose at most. IMPORTANT: the other files from your response WERE saved, so ${p} must stay consistent with them — keep every feature, element id, class, and function they reference. If you need to shorten, simplify logic inside functions; never drop features the other files expect.` }
+          { "role": "user", "content": `Your last response got cut off before ${p} was finished, so ${p} was NOT saved. ${savedNote}Resend ONLY ${p}, complete from its first line, in the ===FILE format — no other files, one short sentence of prose at most.${matchNote} If you need to shorten, simplify logic inside functions; never drop features the ${saved ? "saved files above" : "other files"} expect.` }
         ]);
         const cont = parseFilesFromResponse((await askOnce(contMessages)).result);
         for (const f of cont.files) {

@@ -155,7 +155,7 @@ Next, you could spec a footer!`;
 
   // ---------- truncation recovery: cut-off file re-asked and saved ----------
   console.log("truncation recovery:");
-  const truncResp = `Here's your game!\n\n===FILE: index.html===\n<html>game shell</html>\n===END FILE===\n\n===FILE: script.js===\n// this file gets cut off mid-\nconst canvas = docu`;
+  const truncResp = `Here's your game!\n\n===FILE: index.html===\n<html><canvas id="gameCanvas"></canvas><p>Press SPACEBAR to start</p></html>\n===END FILE===\n\n===FILE: script.js===\n// this file gets cut off mid-\nconst canvas = docu`;
   const contResp = `Here it is complete.\n\n===FILE: script.js===\n// complete game logic\nconst canvas = document.getElementById("c");\n===END FILE===`;
   const build2b = `Done!\n\n===FILE: style.css===\nh1 { color: purple; }\n===END FILE===`;
   const fApi3 = {
@@ -167,6 +167,13 @@ Next, you could spec a footer!`;
   check("continuation ask happened", c3.asks.length === 3);
   const contReq = c3.asks[1].messages[c3.asks[1].messages.length - 1];
   check("continuation asks for just script.js", contReq.role === "user" && contReq.content.includes("Resend ONLY script.js"));
+  // Regression (v1.5.1): the recovery ask must SHOW the saved index.html verbatim
+  // so the resent script.js wires into the real ids/controls instead of inventing
+  // a #startBtn/#score the HTML never had (which broke the game on load, Aug 2026).
+  check("continuation includes saved index.html body verbatim",
+    contReq.content.includes('<canvas id="gameCanvas">') && contReq.content.includes("Press SPACEBAR to start"));
+  check("continuation excludes the cut-off file's own partial body",
+    !contReq.content.includes("this file gets cut off mid-"));
   check("complete html written from first response", c3.added.some(a => a.path === "index.html"));
   check("recovered script.js written", c3.added.some(a => a.path === "script.js" && a.content.includes("complete game logic")));
   check("partial script.js never written", !c3.added.some(a => a.path === "script.js" && a.content.includes("cut off mid-")));
