@@ -5,7 +5,7 @@
 // HTML/CSS/JS files directly into the workspace -> students preview + refine.
 (async function(codioIDE, window) {
 
-  const VERSION = "1.4.0";
+  const VERSION = "1.5.0";
 
   const MAX_CONTEXT_CHARS = 40000;  // budget for spec + diagram + site context
   const MAX_FILE_READ = 12000;      // per-file read cap
@@ -356,16 +356,18 @@ The student says: ${initialInput}`;
   }
 
   // ============================================================
-  // Session log — a hidden workspace file summarizing how the student used
-  // the coach, readable by autograders (JSON array, one entry per session).
-  // Dot-prefixed, so collectPaths() never feeds it back into the LLM context.
-  // Deliberately records the student's questions: Codio's own course coach-log
-  // export logs only the userPrompt field, which is empty for messages-based
-  // coaches like this one — this file is where the questions live.
+  // Session log — a hidden, shared workspace file (.coach-log.json) that every
+  // coach appends to (one entry per session, tagged with `coach`), readable by
+  // autograders. Dot-prefixed, so collectPaths() never feeds it back into the
+  // LLM context. Deliberately records the student's questions: Codio's own
+  // course coach-log export logs only the userPrompt field, which is empty for
+  // messages-based coaches like these — this file is where the questions live.
+  // This coach additionally records file-write stats per entry. Sessions are
+  // never dropped (always appended).
   // ============================================================
 
-  const SESSION_LOG_PATH = ".vibe-coder-log.json";
-  const MAX_LOGGED_SESSIONS = 20;
+  const SESSION_LOG_PATH = ".coach-log.json";
+  const COACH_ID = "vibe-coder";
   const MAX_LOGGED_QUESTIONS = 50;
 
   async function loadSessionHistory() {
@@ -373,7 +375,7 @@ The student says: ${initialInput}`;
     if (!F || typeof F.getContent !== "function") return [];
     try {
       const parsed = JSON.parse(await F.getContent(SESSION_LOG_PATH));
-      return Array.isArray(parsed) ? parsed.slice(-(MAX_LOGGED_SESSIONS - 1)) : [];
+      return Array.isArray(parsed) ? parsed : [];
     } catch (e) {
       return [];
     }
@@ -426,6 +428,7 @@ The student says: ${initialInput}`;
 
     const history = await loadSessionHistory();
     const session = {
+      coach: COACH_ID,
       started: new Date().toISOString(),
       updated: null,
       ended: null,

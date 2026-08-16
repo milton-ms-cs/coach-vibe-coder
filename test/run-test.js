@@ -123,24 +123,25 @@ Next, you could spec a footer!`;
   check("history keeps stub not body", JSON.stringify(c.asks[1].messages).includes("[file: index.html]"));
 
   // session log written and autograder-parseable
-  const logAdds = c.added.filter(a => a.path === ".vibe-coder-log.json");
+  const logAdds = c.added.filter(a => a.path === ".coach-log.json");
   check("session log written each turn", logAdds.length >= 3);
   const log = JSON.parse(logAdds[logAdds.length - 1].content);
   const s = Array.isArray(log) ? log[0] : {};
   check("session log records questions", log.length === 1 && s.questions.join("|") === "build my site|make the header purple");
   check("session log records files", s.filesWritten.includes("index.html") && s.filesWritten.includes("style.css"));
   check("session log stamps end", typeof s.ended === "string" && s.exchanges === 2);
+  check("session log tags coach", s.coach === "vibe-coder");
 
   // a prior session in the log survives a new session (append, not clobber)
   {
     const prior = JSON.stringify([{ started: "2026-08-15T10:00:00Z", questions: ["old"], filesWritten: [], exchanges: 1 }]);
     const fApiA = {
       async getStructure() { return {}; },
-      async getContent(p) { if (p === ".vibe-coder-log.json") return prior; throw new Error("none"); },
+      async getContent(p) { if (p === ".coach-log.json") return prior; throw new Error("none"); },
     };
     const { captured: cA } = boot({ files: [], guidesPage: null, assignmentData: null }, fApiA, ["No files here, just chatting!"]);
     await cA.cb();
-    const adds = cA.added.filter(a => a.path === ".vibe-coder-log.json");
+    const adds = cA.added.filter(a => a.path === ".coach-log.json");
     const logA = JSON.parse(adds[adds.length - 1].content);
     check("prior session preserved, new appended", logA.length === 2 && logA[0].questions[0] === "old" && logA[1].questions[0] === "build my site");
   }
