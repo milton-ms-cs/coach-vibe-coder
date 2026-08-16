@@ -128,6 +128,53 @@ Next, you could spec a footer!`;
   check("workspace-unavailable note in context", c2.asks[0].messages[0].content.includes("could not be read"));
   check("code shown for copy-paste", c2.writes.some(t => t.includes("couldn't save") && t.includes("axolotls")));
 
+  // ---------- truncation recovery: cut-off file re-asked and saved ----------
+  console.log("truncation recovery:");
+  const truncResp = `Here's your game!\n\n===FILE: index.html===\n<html>game shell</html>\n===END FILE===\n\n===FILE: script.js===\n// this file gets cut off mid-\nconst canvas = docu`;
+  const contResp = `Here it is complete.\n\n===FILE: script.js===\n// complete game logic\nconst canvas = document.getElementById("c");\n===END FILE===`;
+  const build2b = `Done!\n\n===FILE: style.css===\nh1 { color: purple; }\n===END FILE===`;
+  const fApi3 = {
+    async getStructure() { return {}; },
+    async getContent() { throw new Error("none"); },
+  };
+  const { captured: c3 } = boot({ files: [], guidesPage: null, assignmentData: null }, fApi3, [truncResp, contResp, build2b]);
+  await c3.cb();
+  check("continuation ask happened", c3.asks.length === 3);
+  const contReq = c3.asks[1].messages[c3.asks[1].messages.length - 1];
+  check("continuation asks for just script.js", contReq.role === "user" && contReq.content.includes("Resend ONLY script.js"));
+  check("complete html written from first response", c3.added.some(a => a.path === "index.html"));
+  check("recovered script.js written", c3.added.some(a => a.path === "script.js" && a.content.includes("complete game logic")));
+  check("partial script.js never written", !c3.added.some(a => a.path === "script.js" && a.content.includes("cut off mid-")));
+  check("report lists both files", c3.writes.some(t => t.includes("Files updated") && t.includes("script.js") && t.includes("index.html")));
+  check("history stub patched after recovery", JSON.stringify(c3.asks[2].messages).includes("[file: script.js]"));
+  check("no cut-off note after recovery", !JSON.stringify(c3.asks[2].messages).includes("cut off"));
+
+  // ---------- unrecoverable truncation: student told what to do ----------
+  const { captured: c4 } = boot({ files: [], guidesPage: null, assignmentData: null }, fApi3, [truncResp, truncResp, truncResp]);
+  await c4.cb();
+  check("gives up after MAX_CONTINUES and tells student", c4.writes.some(t => t.includes("kept getting cut off") && t.includes("shorter")));
+
+  // ---------- overwrite: add() rejects on existing file -> delete + re-add ----------
+  console.log("overwrite fallback:");
+  const existing = new Set(["style.css"]);
+  const deleted = [];
+  const fApi5 = {
+    async getStructure() { return {}; },
+    async getContent() { throw new Error("none"); },
+    async deleteFiles(paths) { deleted.push(...paths); paths.forEach(p => existing.delete(p)); },
+  };
+  const { captured: c5 } = boot({ files: [], guidesPage: null, assignmentData: null }, fApi5, [build2b]);
+  // wrap the capture add() with exists-semantics like live Codio
+  const capAdd = fApi5.add;
+  fApi5.add = async (p, content) => {
+    if (existing.has(p)) throw new Error("file exists");
+    existing.add(p);
+    return capAdd(p, content);
+  };
+  await c5.cb();
+  check("existing file deleted then re-added", deleted.includes("style.css") && c5.added.some(a => a.path === "style.css" && a.content.includes("purple")));
+  check("overwrite reported as success", c5.writes.some(t => t.includes("Files updated") && t.includes("style.css")));
+
   console.log(failures === 0 ? "\nALL TESTS PASSED" : `\n${failures} FAILURE(S)`);
   process.exit(failures === 0 ? 0 : 1);
 })().catch(e => { console.error(e); process.exit(1); });

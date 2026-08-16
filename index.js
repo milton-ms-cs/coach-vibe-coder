@@ -5,11 +5,12 @@
 // HTML/CSS/JS files directly into the workspace -> students preview + refine.
 (async function(codioIDE, window) {
 
-  const VERSION = "1.0.0";
+  const VERSION = "1.1.0";
 
   const MAX_CONTEXT_CHARS = 40000;  // budget for spec + diagram + site context
   const MAX_FILE_READ = 12000;      // per-file read cap
   const MAX_WRITE_FILES = 8;        // per-turn file write cap
+  const MAX_CONTINUES = 2;          // extra asks to recover cut-off files
 
   const SPEC_EXTS = [".md", ".txt"];
   const SVG_EXTS = [".svg"];
@@ -49,6 +50,14 @@ When you build or change files, output each COMPLETE file between marker lines, 
 - Only create files ending in .html, .css, or .js, in the top level or a folder like css/ or js/. Never paths starting with / or containing ..
 - Before the files: 2-4 friendly sentences (middle school reading level) about what you built and how it follows their spec. After the files: suggest ONE specific thing they could spec next.
 - If you're only answering a question or asking for clarification, don't output any file blocks.
+
+## Keep builds SMALL — your response has a hard length limit
+
+If your response runs too long it gets cut off mid-file and the file is lost. So:
+- Keep every file under about 100 lines. Keep comments to one short line each. Keep prose brief.
+- Build the SIMPLEST version that matches the spec. If the spec implies a big build (like a full game), build a minimal working version first, say what you left out, and let the student spec the upgrades one at a time.
+- When changing an existing site, resend ONLY the files that change.
+- If you cannot fit all the files, send the complete ones, then say exactly: "NEXT FILES: name1, name2" so the student can ask you to continue.
 
 ## Workspace context
 
@@ -159,12 +168,14 @@ This is a middle school class. If a request is inappropriate, unkind toward a re
   }
 
   // Extract ===FILE: path=== ... ===END FILE=== blocks from the LLM response.
-  // Returns {files: [{path, content}], prose} where prose is the response with
-  // file bodies replaced by short stubs (safe to show and to keep in history).
+  // Returns {files, prose, truncated}: prose is the response with file bodies
+  // replaced by short stubs (safe to show and to keep in history); truncated
+  // lists any file whose block was cut off before its END marker — ask()
+  // responses have a hard output-length cap, so this happens on big builds.
   function parseFilesFromResponse(text) {
     const files = [];
     const re = /^[ \t]*===FILE:\s*(.+?)\s*===[ \t]*\r?\n([\s\S]*?)\r?\n[ \t]*===END FILE===[ \t]*$/gm;
-    const prose = String(text).replace(re, function(whole, path, content) {
+    let prose = String(text).replace(re, function(whole, path, content) {
       // Tolerate a model that wrapped the body in a code fence anyway
       let body = content.replace(/^\s*```[a-z]*\r?\n/, "").replace(/\r?\n```\s*$/, "");
       const cleanPath = normalizePath(path);
@@ -174,7 +185,21 @@ This is a middle school class. If a request is inappropriate, unkind toward a re
       }
       return `[skipped a file with a disallowed path: ${path}]`;
     });
-    return { files: files, prose: prose.trim() };
+
+    // A FILE marker still left means the response ended mid-file. Drop the
+    // partial body from the prose and remember the path so we can re-ask.
+    const truncated = [];
+    prose = prose.replace(/[ \t]*===FILE:\s*(.+?)\s*===[ \t]*\r?\n[\s\S]*$/, function(whole, path) {
+      const cleanPath = normalizePath(path);
+      if (isSafePath(cleanPath)) truncated.push(cleanPath);
+      return truncStub(cleanPath);
+    });
+
+    return { files: files, prose: prose.trim(), truncated: truncated };
+  }
+
+  function truncStub(path) {
+    return `[${path} got cut off before it finished]`;
   }
 
   async function writeFiles(files) {
@@ -189,7 +214,17 @@ This is a middle school class. If a request is inappropriate, unkind toward a re
         await F.add(f.path, f.content);
         written.push(f.path);
       } catch (e) {
-        failed.push(f.path);
+        // add() rejects when the file already exists (observed live, Aug
+        // 2026) — there is no update method, so delete and re-add. This only
+        // ever targets a path we are about to rewrite with new content.
+        try {
+          if (typeof F.deleteFiles !== "function") throw e;
+          await F.deleteFiles([f.path]);
+          await F.add(f.path, f.content);
+          written.push(f.path);
+        } catch (e2) {
+          failed.push(f.path);
+        }
       }
     }
     return { written: written, failed: failed };
@@ -226,27 +261,64 @@ ${assignmentName ? `\nAssignment: ${assignmentName}\n` : ''}
 The student says: ${initialInput}`;
   }
 
-  // One generate -> parse -> write-files -> report turn.
+  async function askOnce(messages) {
+    return codioIDE.coachBot.ask({
+      systemPrompt: systemPrompt,
+      messages: messages
+    }, { preventMenu: true });
+  }
+
+  function mergeFile(allFiles, f) {
+    for (let i = 0; i < allFiles.length; i++) {
+      if (allFiles[i].path === f.path) { allFiles[i] = f; return; }
+    }
+    if (allFiles.length < MAX_WRITE_FILES) allFiles.push(f);
+  }
+
+  // One generate -> parse -> (recover cut-off files) -> write -> report turn.
   async function runTurn(messages) {
     try {
       codioIDE.coachBot.showThinkingAnimation();
-      const result = await codioIDE.coachBot.ask({
-        systemPrompt: systemPrompt,
-        messages: messages
-      }, { preventMenu: true });
+      const result = await askOnce(messages);
 
       const parsed = parseFilesFromResponse(result.result);
-      let report = parsed.prose;
+      const allFiles = parsed.files.slice();
+      let prose = parsed.prose;
 
-      if (parsed.files.length > 0) {
-        const res = await writeFiles(parsed.files);
+      // ask() responses have an output-length cap. If a file got cut off,
+      // immediately re-ask for just that file, complete. These bookkeeping
+      // exchanges stay local — they are never added to the real history.
+      let pending = parsed.truncated;
+      let tries = 0;
+      while (pending.length > 0 && tries < MAX_CONTINUES) {
+        tries++;
+        const p = pending[0];
+        const contMessages = messages.concat([
+          { "role": "assistant", "content": prose },
+          { "role": "user", "content": `Your last response got cut off before ${p} was finished, so ${p} was NOT saved. Resend ONLY ${p}, complete from its first line, in the ===FILE format — no other files, one short sentence of prose at most. If it was long, simplify the code so the whole file fits well within the length limit.` }
+        ]);
+        const cont = parseFilesFromResponse((await askOnce(contMessages)).result);
+        for (const f of cont.files) {
+          mergeFile(allFiles, f);
+          prose = prose.replace(truncStub(f.path), `[file: ${f.path}]`);
+        }
+        pending = cont.truncated;
+      }
+
+      let report = prose;
+      if (pending.length > 0) {
+        report += `\n\n**Heads up:** ${pending.join(", ")} kept getting cut off by the response length limit and was NOT saved. Try: "make ${pending[0]} shorter and resend it".`;
+      }
+
+      if (allFiles.length > 0) {
+        const res = await writeFiles(allFiles);
         if (res.written.length > 0) {
           report += `\n\n**Files updated in your workspace:** ${res.written.join(", ")}\n\nOpen the preview to see your site!`;
         }
         if (res.failed.length > 0) {
           // Couldn't write — show the code so the student can copy it in
           report += `\n\nI couldn't save these files myself, so copy them in yourself:\n`;
-          for (const f of parsed.files) {
+          for (const f of allFiles) {
             if (res.failed.includes(f.path)) {
               report += `\n**${f.path}**\n\`\`\`\n${f.content}\n\`\`\`\n`;
             }
@@ -257,7 +329,7 @@ The student says: ${initialInput}`;
       codioIDE.coachBot.write(report, codioIDE.coachBot.MESSAGE_ROLES.ASSISTANT);
       // Keep the stubbed prose (not full file bodies) in history — the fresh
       // workspace context in messages[0] carries the current file state.
-      messages.push({ "role": "assistant", "content": parsed.prose });
+      messages.push({ "role": "assistant", "content": prose });
       return true;
     } catch (e) {
       codioIDE.coachBot.write("Hmm, something went wrong on my end. Try asking that again!");
