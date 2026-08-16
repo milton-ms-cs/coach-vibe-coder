@@ -14,17 +14,32 @@ function check(label, cond) {
 }
 
 function boot(context, filesApi, askResponses) {
-  const captured = { asks: [], writes: [], added: [] };
+  const captured = { asks: [], writes: [], added: [], inputCount: 0, fs: {} };
   let inputCount = 0;
   const inputs = ["build my site", "make the header purple"];
   if (filesApi) {
-    filesApi.add = async (p, content) => { captured.added.push({ path: p, content }); };
+    // Model Codio's files API as an in-memory FS so addVerified()'s read-back works:
+    // add() stores content, getContent() returns stored content (falling back to the
+    // fixture's own getContent for pre-seeded files), deleteFiles() removes it.
+    const origGetContent = typeof filesApi.getContent === "function" ? filesApi.getContent.bind(filesApi) : null;
+    const origDelete = typeof filesApi.deleteFiles === "function" ? filesApi.deleteFiles.bind(filesApi) : null;
+    filesApi.add = async (p, content) => { captured.added.push({ path: p, content }); captured.fs[p] = content; };
+    filesApi.getContent = async (p) => {
+      if (Object.prototype.hasOwnProperty.call(captured.fs, p)) return captured.fs[p];
+      if (origGetContent) return origGetContent(p);
+      throw new Error("none");
+    };
+    filesApi.deleteFiles = async (paths) => {
+      for (const p of paths) delete captured.fs[p];
+      if (origDelete) return origDelete(paths);
+    };
   }
   const codioIDE = {
     coachBot: {
       register(id, label, cb) { captured.cb = cb; },
       async getContext() { return context; },
       async input() {
+        captured.inputCount++;
         if (inputCount < inputs.length) return inputs[inputCount++];
         throw new Error("cancelled");
       },
@@ -242,6 +257,34 @@ Next, you could spec a footer!`;
     await Promise.race([cH.cb(), new Promise(r => setTimeout(r, 800))]);
     check("both turns ran despite a hanging log write",
       cH.asks.length === 2 && cH.added.some(a => a.path === "index.html") && cH.added.some(a => a.path === "style.css"));
+  }
+
+  // ---------- 0-byte write bug: verify+retry recovers, never reports success on empty (v1.5.3) ----------
+  // Regression for the file-destroying bug: Codio's deleteFiles()+add() overwrite
+  // landed 0-byte files while add() threw nothing, so the coach reported success and
+  // wiped the file. addVerified() must read back, see the empty write, and retry.
+  console.log("0-byte write recovery:");
+  {
+    let addCount = 0;
+    const fApi6 = {
+      async getStructure() { return {}; },
+      async getContent() { throw new Error("none"); },
+      async deleteFiles() {},
+    };
+    const { captured: c6 } = boot({ files: [], guidesPage: null, assignmentData: null }, fApi6,
+      ["Done!\n\n===FILE: game.js===\nGAMELOGIC\n===END FILE==="]);
+    const capAdd6 = fApi6.add; // boot's capturing add (stores fs + captures)
+    fApi6.add = async (p, content) => {
+      addCount++;
+      // First write of game.js lands EMPTY (the Codio bug); later writes are fine.
+      return capAdd6(p, (p === "game.js" && addCount <= 1) ? "" : content);
+    };
+    await c6.cb();
+    const finalGame = c6.added.filter(a => a.path === "game.js").pop();
+    check("empty write retried until real content lands", finalGame && finalGame.content === "GAMELOGIC");
+    check("not reported saved on the empty write, not dumped",
+      c6.writes.some(t => t.includes("Files updated") && t.includes("game.js")) &&
+      !c6.writes.some(t => t.includes("couldn't save")));
   }
 
   console.log(failures === 0 ? "\nALL TESTS PASSED" : `\n${failures} FAILURE(S)`);

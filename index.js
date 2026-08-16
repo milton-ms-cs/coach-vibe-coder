@@ -5,7 +5,7 @@
 // HTML/CSS/JS files directly into the workspace -> students preview + refine.
 (async function(codioIDE, window) {
 
-  const VERSION = "1.5.2";
+  const VERSION = "1.5.3";
 
   const MAX_CONTEXT_CHARS = 20000;  // budget for spec + diagram + site context (resent every turn — keep lean)
   const MAX_FILE_READ = 8000;       // per-file read cap
@@ -235,6 +235,61 @@ This is a middle school class. If a request is inappropriate, unkind toward a re
     return `[${path} got cut off before it finished]`;
   }
 
+  const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  // Bound any files-API call — a hung deleteFiles/add/getContent must not stall
+  // the coach forever.
+  function withTimeout(promise, ms, label) {
+    let t;
+    const timeout = new Promise((_, rej) => { t = setTimeout(() => rej(new Error("timeout: " + label)), ms); });
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(t));
+  }
+
+  // Confirm what actually landed on disk — add() reporting success is NOT proof
+  // the bytes are there. Observed live Aug 2026: an iteration turn's overwrites of
+  // game.js, draw.js AND .coach-log.json all landed as 0-BYTE files — the deletes
+  // succeeded and the racing adds wrote empty, yet add() threw nothing, so the
+  // coach reported success and silently destroyed the files. Every write is now
+  // read back before it counts as written.
+  async function readbackOk(F, path, content) {
+    if (typeof F.getContent !== "function") return true; // can't verify — trust the write
+    try {
+      const got = await withTimeout(F.getContent(path), 8000, "read " + path);
+      // Guard against the 0-byte / truncated write — don't demand exact equality
+      // (Codio may normalize trailing newlines, which would falsely fail every
+      // write and dump it to chat). Just confirm the bytes really landed.
+      return typeof got === "string" && got.length > 0 && got.length >= content.length - 4;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // Write one file and VERIFY it landed. add() can't overwrite (rejects if the
+  // path exists), so an existing file needs deleteFiles()+add — but add() right
+  // after a delete can land empty if the delete hasn't settled, or if a concurrent
+  // write (e.g. the fire-and-forget log save) is racing it. So: pause after the
+  // delete, re-add, read back, and retry. The retry self-heals transient
+  // corruption — by the next attempt the racing write has finished — without a
+  // global lock (which would let a hung log write stall the next build). A 0-byte
+  // write fails the read-back and is retried, never reported as success.
+  async function addVerified(F, path, content) {
+    try {
+      await withTimeout(F.add(path, content), 8000, "add " + path);
+      if (await readbackOk(F, path, content)) return true;
+    } catch (e) {
+      // exists (or wrote empty) — fall through to the delete+re-add path
+    }
+    if (typeof F.deleteFiles !== "function") return false;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      try { await withTimeout(F.deleteFiles([path]), 8000, "del " + path); } catch (e) {}
+      await delay(150 + attempt * 150); // let the delete settle / racing write finish
+      try { await withTimeout(F.add(path, content), 8000, "add " + path); } catch (e) {}
+      if (await readbackOk(F, path, content)) return true;
+      await delay(150);
+    }
+    return false;
+  }
+
   async function writeFiles(files) {
     const F = codioIDE.files;
     const written = [];
@@ -243,22 +298,8 @@ This is a middle school class. If a request is inappropriate, unkind toward a re
       return { written: written, failed: files.map(f => f.path) };
     }
     for (const f of files) {
-      try {
-        await F.add(f.path, f.content);
-        written.push(f.path);
-      } catch (e) {
-        // add() rejects when the file already exists (observed live, Aug
-        // 2026) — there is no update method, so delete and re-add. This only
-        // ever targets a path we are about to rewrite with new content.
-        try {
-          if (typeof F.deleteFiles !== "function") throw e;
-          await F.deleteFiles([f.path]);
-          await F.add(f.path, f.content);
-          written.push(f.path);
-        } catch (e2) {
-          failed.push(f.path);
-        }
-      }
+      const ok = await addVerified(F, f.path, f.content);
+      (ok ? written : failed).push(f.path);
     }
     return { written: written, failed: failed };
   }
@@ -444,35 +485,22 @@ The student says: ${initialInput}`;
     }
   }
 
+  // Verified log write — same read-back-and-retry as site files, so a racy
+  // deleteFiles()+add() can't silently zero the shared log (observed live: the
+  // whole .coach-log.json history was wiped to 0 bytes by this exact bug).
   async function saveSessionHistory(history) {
     const F = codioIDE.files;
     if (!F || typeof F.add !== "function") return;
     const text = JSON.stringify(history, null, 2);
-    try {
-      await F.add(SESSION_LOG_PATH, text);
-    } catch (e) {
-      // add() rejects when the file exists — delete and re-add
-      try {
-        if (typeof F.deleteFiles !== "function") return;
-        await F.deleteFiles([SESSION_LOG_PATH]);
-        await F.add(SESSION_LOG_PATH, text);
-      } catch (e2) {
-        // Logging must never break the coach
-      }
-    }
+    await addVerified(F, SESSION_LOG_PATH, text);
   }
 
-  // Never block the conversation on a log write. saveSessionHistory() is a full
-  // read-modify-rewrite (deleteFiles + add) of the shared log; awaiting it in the
-  // turn loop means a stalled file write freezes the coach with no input box (the
-  // "logging must never break the coach" comment above was true for THROWS but not
-  // for a HANG). queueSave() serializes writes on a promise chain — so overlapping
-  // fire-and-forget saves can't corrupt the file — and is called WITHOUT await each
-  // turn; only the end-of-session save is awaited (nothing follows it).
-  let saveChain = Promise.resolve();
+  // Never block the conversation on a log write. Awaiting the save in the turn
+  // loop means a stalled write freezes the coach with no input box. queueSave()
+  // is called WITHOUT await each turn (fire-and-forget); serialization/verification
+  // live in saveSessionHistory→runExclusive. Only the end-of-session save is awaited.
   function queueSave(history) {
-    saveChain = saveChain.then(function() { return saveSessionHistory(history); }).catch(function() {});
-    return saveChain;
+    return saveSessionHistory(history).catch(function() {});
   }
 
   codioIDE.coachBot.register("vibeCoder", "Vibe Coder", onButtonPress);
