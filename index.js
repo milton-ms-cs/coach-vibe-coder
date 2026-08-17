@@ -5,7 +5,7 @@
 // HTML/CSS/JS files directly into the workspace -> students preview + refine.
 (async function(codioIDE, window) {
 
-  const VERSION = "1.5.3";
+  const VERSION = "1.5.4";
 
   const MAX_CONTEXT_CHARS = 20000;  // budget for spec + diagram + site context (resent every turn — keep lean)
   const MAX_FILE_READ = 8000;       // per-file read cap
@@ -435,13 +435,12 @@ The student says: ${initialInput}`;
           report += `\n\n**Files updated in your workspace:** ${res.written.join(", ")}\n\nOpen the preview to see your site!`;
         }
         if (res.failed.length > 0) {
-          // Couldn't write — show the code so the student can copy it in
-          report += `\n\nI couldn't save these files myself, so copy them in yourself:\n`;
-          for (const f of allFiles) {
-            if (res.failed.includes(f.path)) {
-              report += `\n**${f.path}**\n\`\`\`\n${f.content}\n\`\`\`\n`;
-            }
-          }
+          // Verified writes retry hard (see writeFiles), so a failure here is
+          // rare and usually transient. Don't dump the files' full source into
+          // the chat — a wall of code overwhelms a middle schooler and they
+          // can't reliably hand-copy several files anyway. Ask them to retry;
+          // the next attempt regenerates and re-writes, which usually clears it.
+          report += `\n\n**Heads up:** I couldn't save ${res.failed.join(", ")} this time. Just ask me to save it again (like "try saving that again") and I'll retry — you don't need to copy anything.`;
         }
       }
 

@@ -168,7 +168,7 @@ Next, you could spec a footer!`;
   const { captured: c2 } = boot({ files: [], guidesPage: null, assignmentData: null }, undefined, [build1]);
   await c2.cb();
   check("workspace-unavailable note in context", c2.asks[0].messages[0].content.includes("could not be read"));
-  check("code shown for copy-paste", c2.writes.some(t => t.includes("couldn't save") && t.includes("axolotls")));
+  check("write failure names the file, no code wall", c2.writes.some(t => t.includes("couldn't save") && t.includes("index.html") && !t.includes("axolotls")));
 
   // ---------- truncation recovery: cut-off file re-asked and saved ----------
   console.log("truncation recovery:");
