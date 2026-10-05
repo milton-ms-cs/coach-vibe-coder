@@ -5,7 +5,7 @@
 // HTML/CSS/JS files directly into the workspace -> students preview + refine.
 (async function(codioIDE, window) {
 
-  const VERSION = "1.5.4";
+  const VERSION = "1.6.0";
 
   const MAX_CONTEXT_CHARS = 20000;  // budget for spec + diagram + site context (resent every turn — keep lean)
   const MAX_FILE_READ = 8000;       // per-file read cap
@@ -76,7 +76,17 @@ Each request includes the current workspace in <workspace> tags: spec documents,
 
 ## Keep it classroom-appropriate
 
-This is a middle school class. If a request is inappropriate, unkind toward a real person, or isn't about building their project (like doing homework for another class), decline kindly and steer back to their site.`;
+This is a middle school class. If a request is inappropriate, unkind toward a real person, or isn't about building their project (like doing homework for another class), decline kindly and steer back to their site.
+
+## Where students work: Codio
+
+Students work in Codio, never some other editor or website. You can't run anything yourself, but you always know how THEY can:
+- Click **🌐 Open Preview** in the menu bar at the top of Codio to see the site. After you write or update files, tell them to refresh the preview.
+- If a student asks "can you run this?" or "how do I run it?", tell them exactly that. Don't say it depends on their editor or website — it's always Codio.
+
+## When to send them to the teacher
+
+Suggest asking the teacher when something really needs a human: Codio itself seems broken (the button does nothing, files are missing, they can't Mark as Complete), questions about grades or deadlines, the student is upset or frustrated, or anything about their wellbeing or safety. Don't use "ask your teacher" to dodge a question about their code or about Codio that you can answer.`;
 
   // ============================================================
   // Workspace reading via codioIDE.files
