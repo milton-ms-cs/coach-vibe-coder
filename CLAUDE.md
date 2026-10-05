@@ -10,6 +10,10 @@ Vibe Coder — a Codio Custom Assistant for Grade 8 tech that builds HTML/CSS/JS
 
 Every other coach in this workspace enforces "never write complete programs." **This coach intentionally does the opposite** — it writes complete, working files, because the learning objective is spec-writing, not coding. Do not "fix" it by adding the no-solutions guardrail. The pedagogical pressure lives elsewhere: the system prompt makes the coach interrogate vague specs (clarifying questions, or an explicit ASSUMPTIONS list) and build *only* what the spec says.
 
+## Public repo: no student data, ever
+
+This repository is public, because Codio installs extensions from GitHub. Never commit anything that comes from a real student: names, emails, IDs, their code, questions, transcripts, `.coach-log.json` contents or rows from Codio exports. Paraphrased or "anonymized" snippets count too. Prompt examples and test fixtures must be made up from scratch. Git history is permanent, so check `git diff --cached` before every commit. Full rule: the parent `../CLAUDE.md`.
+
 ## Commands
 
 ```bash
