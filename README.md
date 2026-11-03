@@ -28,10 +28,12 @@ Each session adds a short summary to the hidden `.coach-log.json` file in the st
 {
   "coach": "vibe-coder",
   "started": "2026-08-16T17:22:03Z", "updated": "...", "ended": "...",
-  "coachVersion": "1.6.0", "exchanges": 4,
+  "coachVersion": "1.7.0", "exchanges": 4,
   "questions": ["Make me a space invaders game...", "..."],
   "filesWritten": ["index.html", "style.css", "script.js"],
-  "writeFailures": 0, "filesLostToLengthLimit": 0
+  "writeFailures": 0, "filesLostToLengthLimit": 0,
+  "failedReplies": 0,
+  "contextFingerprints": [{ "len": 1200, "hash": "1a2b3c4d", "changed": false }]
 }
 ```
 

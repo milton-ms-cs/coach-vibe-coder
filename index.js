@@ -5,7 +5,7 @@
 // HTML/CSS/JS files directly into the workspace -> students preview + refine.
 (async function(codioIDE, window) {
 
-  const VERSION = "1.6.0";
+  const VERSION = "1.7.0";
 
   const MAX_CONTEXT_CHARS = 20000;  // budget for spec + diagram + site context (resent every turn — keep lean)
   const MAX_FILE_READ = 8000;       // per-file read cap
@@ -19,7 +19,30 @@
   const DESIGN_ONLY_EXTS = [".fig", ".pdf"];  // can neither read nor use
   const WRITABLE_EXTS = [".html", ".css", ".js", ".svg", ".md", ".txt"];
 
-  const exitPhrases = ["thanks", "thank you", "bye", "done", "exit", "quit", "stop", "no thanks", "i'm good", "im good", "that's all", "thats all"];
+  const exitPhrases = ["thanks", "thank you", "bye", "goodbye", "done", "exit", "quit", "stop", "no thanks", "i'm good", "im good", "that's all", "thats all"];
+
+  // Exit only when the whole message is a goodbye ("thanks!", "ok bye", "no thanks 🙂",
+  // "i’m good thanks"). Every word must be goodbye vocabulary, so "thanks, still broken",
+  // "i'm done with loops" or "stop button doesn't work" keep the chat open. "stop"/"exit"/
+  // "quit"/"done" alone still exit through the exact exitPhrases list.
+  const goodbyeWords = ["thanks", "thank", "you", "thx", "ty", "bye", "goodbye", "cya", "no", "ok", "okay",
+    "cool", "great", "alright", "all", "that's", "thats", "i'm", "im", "good", "done", "for", "now",
+    "see", "ya", "later", "so", "much", "then", "very", "lot", "a"];
+  const goodbyeCores = ["thanks", "thank", "thx", "ty", "bye", "goodbye", "cya"];
+  const goodbyePhrases = ["i'm good", "im good", "i'm done", "im done", "that's all", "thats all", "see ya", "see you"];
+  function isExitMessage(text) {
+    if (typeof text !== "string") return false;
+    if (text.indexOf("?") !== -1) return false;
+    const norm = text.toLowerCase().replace(/[‘’]/g, "'").replace(/[^a-z' ]+/g, " ").replace(/\s+/g, " ").trim();
+    if (!norm) return false;
+    if (exitPhrases.includes(norm)) return true;
+    const words = norm.split(" ");
+    if (words.length > 6) return false;
+    if (!words.every(function(w) { return goodbyeWords.indexOf(w) !== -1; })) return false;
+    const padded = " " + norm + " ";
+    return words.some(function(w) { return goodbyeCores.indexOf(w) !== -1; }) ||
+      goodbyePhrases.some(function(p) { return padded.indexOf(" " + p + " ") !== -1; });
+  }
 
   const systemPrompt = `You are "Vibe Coder," a friendly build assistant for 8th grade tech students who are learning to write clear DESIGN SPECS. Unlike a tutor, you DO write complete, working code — but ONLY what the student's spec clearly describes. Their job is the design thinking; your job is the build.
 
@@ -33,7 +56,7 @@
 ## What you build
 
 - Plain HTML, CSS, and JavaScript only — no frameworks, no build tools, no libraries or CDN scripts. A Google Fonts <link> is okay.
-- Multi-file sites: index.html + style.css (+ script.js when the spec needs behavior), connected with relative links.
+- Multi-file sites: index.html + style.css (+ script.js when the spec needs behavior), connected with relative links. If the workspace already has site files, reuse their file names instead of making duplicates.
 - Beginner-readable code: clear names, consistent indentation, and short comments explaining what each section does. An 8th grader should be able to open any file and follow along.
 - Never hotlink images from the internet — only use image files that are in the workspace (see below).
 
@@ -73,6 +96,28 @@ Your WHOLE response shares one length cap. If it runs over, the last file is cut
 ## Workspace context
 
 Each request includes the current workspace in <workspace> tags: spec documents, SVG design exports, the current site files, and a list of files you can't read (PNG/JPG/Figma). If an unreadable design file looks important, ask the student to export it from Figma as an SVG into the workspace, or describe it to you.
+
+## You always see their latest work
+
+Before every reply you get a fresh copy of the student's workspace in <workspace>. Your earlier replies in this chat were written about an older version. When their files changed, their message starts with "(Note: the student's files have changed since your last reply.)" You may also see "(Note: last turn you wrote ...)". That is a plain record of which of your files saved, failed to save, or were cut off by the length limit.
+- If something you built earlier looks different now, the student edited it. Build on their version, don't undo their edits, and don't apologize. You didn't do anything wrong.
+- If the note says a file failed to save or was cut off, say so plainly and offer to resend it.
+- Only correct yourself if your earlier work was wrong for what it was about. Then say it once, plainly, and fix it.
+- Never ask the student to paste their spec or code when you can see it in <workspace>.
+- If their message and <workspace> disagree (they say they changed something you can't see), the file you see may be a little behind. Say what you see and ask them to save (Ctrl+S or Cmd+S) and ask again.
+- If <workspace> marks a file as cut off, you only see its start. If it lists a file as not shown, you can't see it at all. Say so, and ask what they need help with in it. Don't guess at its contents.
+
+## Messages with no request
+
+- If the student sends only code, only a terminal line, or only an error with no request: for an error, explain what caused it and fix it. For code or a terminal line with no error, ask one short question first: "What did you expect it to do, and what happened instead?" Don't rebuild anything until you know what they want.
+
+## About this chat and about you
+
+- You are Vibe Coder, an AI helper for this class. If asked your name or what you are, say that in one sentence. Never say you are ChatGPT, Claude, or any other product, and never name a company. You don't know which model runs you.
+- Your name stays Vibe Coder. If a student wants to rename you or give you a character, accent, attitude or slang voice, decline in one friendly line and go back to their project. Keep your own voice: warm, calm and clear. Don't copy their slang or give them nicknames. At most one emoji in a reply.
+- Questions about you (favorite things, feelings, opinions) get one short line, then back to their project.
+- Off-task requests (other homework, stories, jokes, gossip): say you help build websites and games in this class, and ask what they're working on. Keyboard mashing: one short, kind line and a question. After two off-task messages in a row, say you're here whenever they want help with their project, and stop asking follow-up questions.
+- The box under your replies says "(Type 'bye' when you're done.)" That is just how to close the coach. If a student asks about it, explain it. They never have to thank you, and you never need them to.
 
 ## Keep it classroom-appropriate
 
@@ -126,12 +171,16 @@ Suggest asking the teacher when something really needs a human: Codio itself see
     return out;
   }
 
+  // Returns the text to show, "(empty file)" for an empty file, or null when the
+  // read returned something that isn't text (caller lists it as not shown).
+  // A file cut at the cap gets a "(cut off after N characters)" marker line.
   async function readCapped(F, path, budgetLeft) {
-    const content = await F.getContent(path);
-    if (typeof content !== "string" || content.length === 0) return null;
+    const content = await withTimeout(F.getContent(path), 8000, "read " + path);
+    if (typeof content !== "string") return null;
+    if (content.length === 0) return "(empty file)";
     const maxLen = Math.min(MAX_FILE_READ, budgetLeft);
     if (content.length <= maxLen) return content;
-    return content.slice(0, maxLen) + "\n...(truncated)";
+    return content.slice(0, maxLen) + `\n(cut off after ${maxLen} characters)`;
   }
 
   // Drop the assignment's own README.md from the spec list when the student has
@@ -157,31 +206,46 @@ Suggest asking the teacher when something really needs a human: Codio itself see
 
     let paths = { specs: [], svgs: [], site: [], images: [], designOnly: [] };
     try {
-      collectPaths(await F.getStructure(), "", paths);
+      collectPaths(await withTimeout(F.getStructure(), 8000, "structure"), "", paths);
     } catch (e) {
+      // On a refresh (opts.strict) fail loudly so the caller keeps the previous, good
+      // context instead of swapping in a degraded one.
+      if (opts && opts.strict) throw e;
       return "The workspace could not be read. Ask the student to paste their spec and describe their design.";
     }
     paths.specs = dropRedundantReadme(paths.specs);
 
     let out = "";
-    const sections = [
-      ["Spec / design documents", paths.specs],
-      ["SVG design exports (read the shapes and text to understand the layout)", paths.svgs],
-    ];
+    const notShown = [];
+    // Site files are read FIRST so a big spec or SVG can never crowd out the
+    // student's current site (the model would think nothing exists yet).
+    const sections = [];
     if (includeSite) {
       sections.push(["Current site files", paths.site]);
     }
+    sections.push(["Spec / design documents", paths.specs]);
+    sections.push(["SVG design exports (read the shapes and text to understand the layout)", paths.svgs]);
+    // Priority order (site first) decides what fits the budget; the files are then
+    // displayed sorted by path so key order can't change the fingerprint.
+    const entries = [];
+    let used = 0;
     for (const [label, list] of sections) {
       for (const p of list) {
-        if (out.length >= MAX_CONTEXT_CHARS) break;
+        // Too little budget left to show anything useful counts as not shown.
+        if (used >= MAX_CONTEXT_CHARS - 500) { notShown.push(p); continue; }
         try {
-          const content = await readCapped(F, p, MAX_CONTEXT_CHARS - out.length);
-          if (content !== null) out += `\n--- ${label} — ${p} ---\n${content}\n`;
+          const content = await readCapped(F, p, MAX_CONTEXT_CHARS - used);
+          if (content === null) { notShown.push(p); continue; }
+          const text = `\n--- ${label} — ${p} ---\n${content}\n`;
+          used += text.length;
+          entries.push({ path: p, text: text });
         } catch (e) {
-          // Silent — skip unreadable file
+          notShown.push(p); // couldn't be read: say so instead of hiding it
         }
       }
     }
+    entries.sort(function(x, y) { return x.path < y.path ? -1 : (x.path > y.path ? 1 : 0); });
+    for (const en of entries) out += en.text;
 
     if (paths.images.length > 0) {
       out += `\nImage assets the student has uploaded (you can't see inside them, but the site CAN use them by relative path): ${paths.images.join(", ")}\n`;
@@ -191,8 +255,11 @@ Suggest asking the teacher when something really needs a human: Codio itself see
       out += `\nDesign files present but NOT readable (binary): ${paths.designOnly.join(", ")}. If one matters, ask the student to export it as an SVG or describe it.\n`;
     }
 
-    if (!out) {
+    if (!out && notShown.length === 0) {
       out = "The workspace has no spec documents, SVG designs, or site files yet.";
+    }
+    if (notShown.length > 0) {
+      out += `\nNot shown (too long to include, or couldn't be read): ${notShown.join(", ")}\n`;
     }
     return out;
   }
@@ -217,6 +284,7 @@ Suggest asking the teacher when something really needs a human: Codio itself see
   // responses have a hard output-length cap, so this happens on big builds.
   function parseFilesFromResponse(text) {
     const files = [];
+    const overCap = [];
     const re = /^[ \t]*===FILE:\s*(.+?)\s*===[ \t]*\r?\n([\s\S]*?)\r?\n[ \t]*===END FILE===[ \t]*$/gm;
     let prose = String(text).replace(re, function(whole, path, content) {
       // Tolerate a model that wrapped the body in a code fence anyway
@@ -225,6 +293,10 @@ Suggest asking the teacher when something really needs a human: Codio itself see
       if (isSafePath(cleanPath) && files.length < MAX_WRITE_FILES) {
         files.push({ path: cleanPath, content: body });
         return `[file: ${cleanPath}]`;
+      }
+      if (isSafePath(cleanPath)) {
+        overCap.push(cleanPath);
+        return `[skipped ${cleanPath}: too many files in one turn]`;
       }
       return `[skipped a file with a disallowed path: ${path}]`;
     });
@@ -238,7 +310,7 @@ Suggest asking the teacher when something really needs a human: Codio itself see
       return truncStub(cleanPath);
     });
 
-    return { files: files, prose: prose.trim(), truncated: truncated };
+    return { files: files, prose: prose.trim(), truncated: truncated, overCap: overCap };
   }
 
   function truncStub(path) {
@@ -320,10 +392,26 @@ Suggest asking the teacher when something really needs a human: Codio itself see
 
   // Build the context-bearing first message from a fresh read. Re-run before
   // every ask() so the coach sees the student's latest spec and site edits.
-  async function buildContextMessage(initialInput, opts) {
-    const context = await codioIDE.coachBot.getContext();
+  // isRefresh=false: first turn, ends with "The student says: <question>".
+  // isRefresh=true: later turns, the first question is labelled as the OLD one so
+  // the model doesn't treat it as the current request.
+  // The exact text between the <workspace> tags is kept in lastFilesBlock so the
+  // caller can fingerprint it (the slim recovery context never overwrites it).
+  let lastFilesBlock = "";
+  async function buildContextMessage(initialInput, isRefresh, opts) {
+    let context;
+    try {
+      context = await withTimeout(codioIDE.coachBot.getContext(), 8000, "context");
+    } catch (e) {
+      // First turn: carry on without guide/assignment info. On a refresh, fail so the
+      // caller keeps the previous (better) context.
+      if (isRefresh) throw e;
+      context = {};
+    }
+    if (!context || typeof context !== "object") context = {};
 
-    const workspaceText = await gatherWorkspaceText(opts);
+    const workspaceText = await gatherWorkspaceText({ includeSite: !opts || opts.includeSite !== false, strict: !!isRefresh });
+    if (!opts || opts.includeSite !== false) lastFilesBlock = workspaceText;
 
     const guideContent = (context.guidesPage && context.guidesPage.content)
       ? context.guidesPage.content
@@ -342,7 +430,9 @@ Here is the assignment guide:
 ${guideContent}
 </guide>
 ${assignmentName ? `\nAssignment: ${assignmentName}\n` : ''}
-The student says: ${initialInput}`;
+${isRefresh
+    ? `(The student's first question in this chat was: ${initialInput}. Their newest message is the last one below.)`
+    : `The student says: ${initialInput}`}`;
   }
 
   async function askOnce(messages) {
@@ -352,11 +442,13 @@ The student says: ${initialInput}`;
     }, { preventMenu: true });
   }
 
+  // Returns false when the file had to be dropped because allFiles is full.
   function mergeFile(allFiles, f) {
     for (let i = 0; i < allFiles.length; i++) {
-      if (allFiles[i].path === f.path) { allFiles[i] = f; return; }
+      if (allFiles[i].path === f.path) { allFiles[i] = f; return true; }
     }
-    if (allFiles.length < MAX_WRITE_FILES) allFiles.push(f);
+    if (allFiles.length < MAX_WRITE_FILES) { allFiles.push(f); return true; }
+    return false;
   }
 
   // Render the files already completed this turn as ===FILE=== blocks, so a
@@ -379,14 +471,25 @@ The student says: ${initialInput}`;
   }
 
   // One generate -> parse -> (recover cut-off files) -> write -> report turn.
-  async function runTurn(messages, initialInput) {
+  async function runTurn(messages, initialInput, session) {
     try {
       codioIDE.coachBot.showThinkingAnimation();
       const result = await askOnce(messages);
 
-      const parsed = parseFilesFromResponse(result.result);
+      const reply = (result && typeof result.result === "string") ? result.result : "";
+      if (!reply.trim()) {
+        // Never keep an empty assistant turn: an empty message in the history can make every
+        // later ask() fail too (seen live: one session got 10 empty replies in a row).
+        if (session) session.failedReplies = (session.failedReplies || 0) + 1;
+        codioIDE.coachBot.write("Hmm, I didn't get an answer that time. Please ask again!", codioIDE.coachBot.MESSAGE_ROLES.ASSISTANT);
+        messages.pop();          // drop the user turn that got no answer
+        return { written: [], failed: [], truncated: [], noReply: true };
+      }
+
+      const parsed = parseFilesFromResponse(reply);
       const allFiles = parsed.files.slice();
       let prose = parsed.prose;
+      const overCap = parsed.overCap.slice();
 
       // ask() responses have an output-length cap. If a file got cut off,
       // immediately re-ask for just that file, complete. These bookkeeping
@@ -403,7 +506,7 @@ The student says: ${initialInput}`;
         tries++;
         if (slimFirst === null) {
           try {
-            slimFirst = { "role": "user", "content": await buildContextMessage(initialInput, { includeSite: false }) };
+            slimFirst = { "role": "user", "content": await buildContextMessage(initialInput, true, { includeSite: false }) };
           } catch (e) {
             slimFirst = messages[0];
           }
@@ -425,17 +528,37 @@ The student says: ${initialInput}`;
           { "role": "assistant", "content": prose },
           { "role": "user", "content": `Your last response got cut off before ${p} was finished, so ${p} was NOT saved. ${savedNote}Resend ONLY ${p}, complete from its first line, in the ===FILE format — no other files, one short sentence of prose at most.${matchNote} If you need to shorten, simplify logic inside functions; never drop features the ${saved ? "saved files above" : "other files"} expect.` }
         ]);
-        const cont = parseFilesFromResponse((await askOnce(contMessages)).result);
+        const contResult = await askOnce(contMessages);
+        const contReply = (contResult && typeof contResult.result === "string") ? contResult.result : "";
+        if (!contReply.trim()) {
+          // Empty continuation: end the recovery loop. Nothing is added to history
+          // (these bookkeeping turns are local); the file is reported as not saved.
+          if (session) session.failedReplies = (session.failedReplies || 0) + 1;
+          break;
+        }
+        const cont = parseFilesFromResponse(contReply);
         for (const f of cont.files) {
-          mergeFile(allFiles, f);
-          prose = prose.replace(truncStub(f.path), `[file: ${f.path}]`);
+          if (mergeFile(allFiles, f)) {
+            prose = prose.replace(truncStub(f.path), `[file: ${f.path}]`);
+          } else if (!overCap.includes(f.path)) {
+            overCap.push(f.path);
+          }
         }
         pending = cont.truncated;
       }
 
+      // Work out what was lost from what actually landed in allFiles, not from the
+      // last continuation's truncation list (a reply with prose but no file block
+      // would otherwise lose the file silently).
+      const lost = parsed.truncated.concat(pending)
+        .filter(function(p, i, a) { return a.indexOf(p) === i && !allFiles.some(function(f) { return f.path === p; }) && !overCap.includes(p); });
+
       let report = prose;
-      if (pending.length > 0) {
-        report += `\n\n**Heads up:** ${pending.join(", ")} kept getting cut off by the response length limit and was NOT saved. Try: "make ${pending[0]} shorter and resend it".`;
+      if (overCap.length > 0) {
+        report += `\n\n**Heads up:** I can only save ${MAX_WRITE_FILES} files at a time, so ${overCap.join(", ")} was NOT saved. Ask me for it in your next message.`;
+      }
+      if (lost.length > 0) {
+        report += `\n\n**Heads up:** ${lost.join(", ")} kept getting cut off by the response length limit and was NOT saved. Try: "make ${lost[0]} shorter and resend it".`;
       }
 
       let res = { written: [], failed: [] };
@@ -454,13 +577,15 @@ The student says: ${initialInput}`;
         }
       }
 
-      codioIDE.coachBot.write(report, codioIDE.coachBot.MESSAGE_ROLES.ASSISTANT);
+      if (report.trim()) codioIDE.coachBot.write(report, codioIDE.coachBot.MESSAGE_ROLES.ASSISTANT);
       // Keep the stubbed prose (not full file bodies) in history — the fresh
       // workspace context in messages[0] carries the current file state.
-      messages.push({ "role": "assistant", "content": prose });
-      return { written: res.written, failed: res.failed, truncated: pending };
+      // Never push an empty assistant turn.
+      messages.push({ "role": "assistant", "content": prose.trim() ? prose : "(I built the files with no message.)" });
+      return { written: res.written, failed: res.failed, truncated: lost, overCap: overCap };
     } catch (e) {
-      codioIDE.coachBot.write("Hmm, something went wrong on my end. Try asking that again!");
+      if (session) session.failedReplies = (session.failedReplies || 0) + 1;
+      codioIDE.coachBot.write("Hmm, something went wrong on my end. Try asking that again!", codioIDE.coachBot.MESSAGE_ROLES.ASSISTANT);
       messages.pop();
       return null;
     } finally {
@@ -483,15 +608,30 @@ The student says: ${initialInput}`;
   const COACH_ID = "vibe-coder";
   const MAX_LOGGED_QUESTIONS = 50;
 
+  // Returns the parsed history, [] when the file doesn't exist or is empty, or null when the
+  // file exists but couldn't be read/parsed. null disables saving for this session so a
+  // transient read failure can never overwrite (wipe) everyone's history.
   async function loadSessionHistory() {
     const F = codioIDE.files;
-    if (!F || typeof F.getContent !== "function") return [];
-    try {
-      const parsed = JSON.parse(await F.getContent(SESSION_LOG_PATH));
-      return Array.isArray(parsed) ? parsed : [];
-    } catch (e) {
-      return [];
+    if (!F || typeof F.getContent !== "function") return null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const text = await withTimeout(F.getContent(SESSION_LOG_PATH), 8000, "read log");
+        if (typeof text !== "string" || !text.trim()) return [];
+        const parsed = JSON.parse(text);
+        return Array.isArray(parsed) ? parsed : null;
+      } catch (e) {
+        await delay(300);
+      }
     }
+    // Both reads failed: only start fresh if the file really isn't there.
+    try {
+      if (typeof F.getStructure === "function") {
+        const tree = await withTimeout(F.getStructure(), 8000, "structure");
+        if (tree && typeof tree === "object" && Object.keys(tree).length > 0 && !(SESSION_LOG_PATH in tree)) return [];
+      }
+    } catch (e) {}
+    return null;
   }
 
   // Verified log write — same read-back-and-retry as site files, so a racy
@@ -506,11 +646,25 @@ The student says: ${initialInput}`;
 
   // Never block the conversation on a log write. Awaiting the save in the turn
   // loop means a stalled write freezes the coach with no input box. queueSave()
-  // is called WITHOUT await each turn (fire-and-forget); serialization/verification
-  // live in saveSessionHistory→runExclusive. Only the end-of-session save is awaited.
+  // is called WITHOUT await each turn (fire-and-forget); the chain serializes the
+  // writes so overlapping saves can't corrupt the file; verification lives in
+  // saveSessionHistory. Only the end-of-session save is awaited.
+  let saveChain = Promise.resolve();
   function queueSave(history) {
-    return saveSessionHistory(history).catch(function() {});
+    saveChain = saveChain.then(function() { return saveSessionHistory(history); }).catch(function() {});
+    return saveChain;
   }
+
+  // Short, stable fingerprint of the files block the model sees (FNV-1a, 8 hex chars).
+  // Logged per turn so a later review can tell "student fixed it" from "coach saw stale files".
+  function fingerprint(text) {
+    const s = String(text || "");
+    let h = 0x811c9dc5;
+    for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+    return { len: s.length, hash: ("0000000" + h.toString(16)).slice(-8) };
+  }
+
+  const GOODBYE = "Okay, bye! Come back any time you want help.";
 
   codioIDE.coachBot.register("vibeCoder", "Vibe Coder", onButtonPress);
 
@@ -531,7 +685,9 @@ The student says: ${initialInput}`;
         return;
       }
 
-      if (initialInput === "version") {
+      if ((initialInput || "").trim() === "") continue;
+
+      if (initialInput.trim().toLowerCase() === "version") {
         codioIDE.coachBot.write(`Current version: ${VERSION}`, codioIDE.coachBot.MESSAGE_ROLES.ASSISTANT);
         continue;
       }
@@ -539,7 +695,16 @@ The student says: ${initialInput}`;
       break;
     }
 
-    const history = await loadSessionHistory();
+    // The very first message can be a goodbye: no ask(), no log session.
+    if (isExitMessage(initialInput)) {
+      codioIDE.coachBot.write(GOODBYE, codioIDE.coachBot.MESSAGE_ROLES.ASSISTANT);
+      codioIDE.coachBot.showMenu();
+      return;
+    }
+
+    let history = await loadSessionHistory();
+    const logEnabled = history !== null; // null = log couldn't be read: don't save (would wipe it)
+    if (!logEnabled) history = [];
     const session = {
       coach: COACH_ID,
       started: new Date().toISOString(),
@@ -550,15 +715,24 @@ The student says: ${initialInput}`;
       questions: [],
       filesWritten: [],
       writeFailures: 0,
-      filesLostToLengthLimit: 0
+      filesLostToLengthLimit: 0,
+      failedReplies: 0,
+      contextFingerprints: []
     };
     history.push(session);
 
-    async function recordTurn(question, stats) {
+    // Log the question BEFORE building context or asking, so a failure later in the
+    // turn can't drop it from the log.
+    function recordQuestion(question) {
       session.exchanges += 1;
       if (session.questions.length < MAX_LOGGED_QUESTIONS) {
         session.questions.push(String(question).slice(0, 300));
       }
+      session.updated = new Date().toISOString();
+      if (logEnabled) queueSave(history); // fire-and-forget: never block the input loop on a log write
+    }
+
+    function recordStats(stats) {
       if (stats) {
         for (const p of stats.written) {
           if (!session.filesWritten.includes(p)) session.filesWritten.push(p);
@@ -567,41 +741,120 @@ The student says: ${initialInput}`;
         session.filesLostToLengthLimit += stats.truncated.length;
       }
       session.updated = new Date().toISOString();
-      queueSave(history); // fire-and-forget: never block the input loop on a log write
+      if (logEnabled) queueSave(history);
     }
 
-    messages.push({ "role": "user", "content": await buildContextMessage(initialInput) });
-    await recordTurn(initialInput, await runTurn(messages, initialInput));
+    // Hash of the files block as of the last reply that actually got answered. Kept in
+    // its own variable (the logged array is capped). Advanced only after a non-empty
+    // reply, so a failed turn's retry still gets the "files changed" note.
+    let lastAnsweredHash = null;
+    let currentHash = null;
+    function noteContext() {
+      const fp = fingerprint(lastFilesBlock);
+      currentHash = fp.hash;
+      const changed = lastAnsweredHash !== null && lastAnsweredHash !== fp.hash;
+      if (session.contextFingerprints.length < MAX_LOGGED_QUESTIONS) {
+        session.contextFingerprints.push({ len: fp.len, hash: fp.hash, changed: changed });
+      }
+      return changed;
+    }
+    function noteRefreshFailed() {
+      currentHash = null;
+      if (session.contextFingerprints.length < MAX_LOGGED_QUESTIONS) {
+        session.contextFingerprints.push({ len: null, hash: null, changed: false, refreshFailed: true });
+      }
+    }
+
+    // After a turn: advance the baseline on a real answer. If the coach wrote files,
+    // re-read the workspace so its OWN writes don't count as the student changing
+    // things (the separate "last turn you wrote ..." note already covers them).
+    async function afterTurn(stats) {
+      if (!stats || stats.noReply) return;
+      if (currentHash !== null) lastAnsweredHash = currentHash;
+      if (stats.written.length > 0) {
+        try { lastAnsweredHash = fingerprint(await gatherWorkspaceText({ strict: true })).hash; } catch (e) {}
+      }
+    }
+
+    // Used when the files can't be read at all: the coach still answers, and says so.
+    function fallbackContext(question) {
+      lastFilesBlock = "(I couldn't read the student's files just now.)";
+      return `Here is the student's workspace:\n<workspace>\n${lastFilesBlock}\n</workspace>\nHere is the assignment guide:\n<guide>\nNo guide available.\n</guide>\n\nThe student says: ${question}`;
+    }
+    async function firstContext(question) {
+      try {
+        const m = await buildContextMessage(question, false);
+        noteContext();
+        return m;
+      } catch (e) {
+        const m = fallbackContext(question);
+        noteContext();
+        return m;
+      }
+    }
+
+    // Facts about last turn's file writes, which the model can't otherwise see
+    // (history keeps only stubbed prose). Prefixed to the NEXT user message.
+    function writeNote(stats) {
+      if (!stats) return "";
+      const over = stats.overCap || [];
+      if (stats.written.length === 0 && stats.failed.length === 0 && stats.truncated.length === 0 && over.length === 0) return "";
+      const list = function(a) { return a.length ? a.join(", ") : "none"; };
+      return `(Note: last turn you wrote ${list(stats.written)}. Failed: ${list(stats.failed)}. Cut off by the length limit: ${list(stats.truncated)}.${over.length ? " Not saved (too many files): " + over.join(", ") + "." : ""})`;
+    }
+
+    recordQuestion(initialInput);
+    messages.push({ "role": "user", "content": await firstContext(initialInput) });
+    let lastStats = await runTurn(messages, initialInput, session);
+    await afterTurn(lastStats);
+    recordStats(lastStats);
 
     while (true) {
       let input;
       try {
-        input = await codioIDE.coachBot.input("What next? Refine your spec, ask for changes, or say 'thanks' when you're done.");
+        input = await codioIDE.coachBot.input("What else can I help you with? (Type 'bye' when you're done.)");
       } catch (e) {
         break;
       }
 
-      if (input === "version") {
+      if ((input || "").trim() === "") continue;
+
+      if (input.trim().toLowerCase() === "version") {
         codioIDE.coachBot.write(`Current version: ${VERSION}`, codioIDE.coachBot.MESSAGE_ROLES.ASSISTANT);
         continue;
       }
 
-      const trimmedInput = input.trim().toLowerCase();
-      if (exitPhrases.includes(trimmedInput)) {
+      if (isExitMessage(input)) {
         break;
       }
 
-      messages.push({ "role": "user", "content": input });
-
-      // Refresh the context block so the coach sees the student's latest
-      // spec/site edits (including files it just wrote last turn)
-      try {
-        messages[0] = { "role": "user", "content": await buildContextMessage(initialInput) };
-      } catch (e) {
-        // Keep the previous context if the refresh fails
+      recordQuestion(input);
+      const notes = [];
+      if (messages.length === 0) {
+        // The first reply failed, so there is no context message yet: start over
+        // with THIS message as the question instead of answering the old one.
+        initialInput = input;
+        messages.push({ "role": "user", "content": await firstContext(input) });
+      } else {
+        // Refresh the context block so the coach sees the student's latest
+        // spec/site edits (including files it just wrote last turn)
+        let changed = false;
+        try {
+          messages[0] = { "role": "user", "content": await buildContextMessage(initialInput, true) };
+          changed = noteContext();
+        } catch (e) {
+          // Keep the previous context if the refresh fails
+          noteRefreshFailed();
+        }
+        const wn = writeNote(lastStats);
+        if (wn) notes.push(wn);
+        if (changed) notes.push("(Note: the student's files have changed since your last reply.)");
+        messages.push({ "role": "user", "content": notes.length ? notes.join("\n") + "\n\n" + input : input });
       }
 
-      await recordTurn(input, await runTurn(messages, initialInput));
+      lastStats = await runTurn(messages, initialInput, session);
+      await afterTurn(lastStats);
+      recordStats(lastStats);
 
       // Keep first message (workspace + guide) + last 8 messages (4 exchanges)
       while (messages.length > 9) {
@@ -610,13 +863,13 @@ The student says: ${initialInput}`;
     }
 
     session.ended = new Date().toISOString();
-    await queueSave(history); // flush everything queued this session (safe to await — no input follows)
+    if (logEnabled) await queueSave(history); // flush everything queued this session (safe to await, no input follows)
 
-    codioIDE.coachBot.write("You're welcome! Keep refining that spec — great specs make great sites.");
+    codioIDE.coachBot.write(GOODBYE, codioIDE.coachBot.MESSAGE_ROLES.ASSISTANT);
     codioIDE.coachBot.showMenu();
   }
 
   // Exposed only for the Node test harness (unused inside Codio)
-  window.__vibeCoderTest = { parseFilesFromResponse, isSafePath, collectPaths, normalizePath };
+  window.__vibeCoderTest = { parseFilesFromResponse, isSafePath, collectPaths, normalizePath, isExitMessage, fingerprint };
 
 })(window.codioIDE, window);

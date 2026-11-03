@@ -13,10 +13,10 @@ function check(label, cond) {
   else { console.error("  FAIL " + label); failures++; }
 }
 
-function boot(context, filesApi, askResponses) {
+function boot(context, filesApi, askResponses, inputsOverride) {
   const captured = { asks: [], writes: [], added: [], inputCount: 0, fs: {} };
   let inputCount = 0;
-  const inputs = ["build my site", "make the header purple"];
+  const inputs = inputsOverride || ["build my site", "make the header purple"];
   if (filesApi) {
     // Model Codio's files API as an in-memory FS so addVerified()'s read-back works:
     // add() stores content, getContent() returns stored content (falling back to the
@@ -285,6 +285,272 @@ Next, you could spec a footer!`;
     check("not reported saved on the empty write, not dumped",
       c6.writes.some(t => t.includes("Files updated") && t.includes("game.js")) &&
       !c6.writes.some(t => t.includes("couldn't save")));
+  }
+
+  // ---------- v1.7.0 additions ----------
+  const ctx0 = { files: [], guidesPage: { content: "GUIDE" }, assignmentData: null };
+  const noEmptyAssistant = (asks) => asks.every(a => a.messages.every(m => typeof m.content === "string" && m.content.trim() !== ""));
+  const lastLog = (cap) => { const a = cap.added.filter(x => x.path === ".coach-log.json"); return a.length ? JSON.parse(a[a.length - 1].content) : null; };
+  // An EMPTY structure map is treated as unreadable by loadSessionHistory (S2), so an
+  // "empty workspace" fixture carries a dot-file (skipped by collectPaths).
+  const mkApi = (tree, files) => ({
+    async getStructure() { return Object.keys(tree).length ? tree : { ".keep": 1 }; },
+    async getContent(p) { if (files && Object.prototype.hasOwnProperty.call(files, p)) return typeof files[p] === "function" ? files[p]() : files[p]; throw new Error("none"); },
+  });
+
+  console.log("isExitMessage:");
+  {
+    const X = T.isExitMessage;
+    for (const t of ["thanks!", "ok bye", "no thanks", "i\u2019m good thanks", "thank you so much", "that's all", "stop", "done", "Thank you", "no thanks \u{1F642}", "bye"]) check("exits: " + t, X(t));
+    for (const t of ["thanks still broken", "im done with loops", "im good at this", "stop button doesn't work", "thanks, but why?", "ok", "good",
+      "thanks can you make the header bigger please", "make the footer stay at the bottom", null, undefined, "   ", "!!!"]) check("stays open: " + t, !X(t));
+  }
+
+  console.log("first message is a goodbye:");
+  {
+    const { captured: cx } = boot(ctx0, mkApi({}), ["never used"], ["thanks!"]);
+    await cx.cb();
+    check("no ask and no log session", cx.asks.length === 0 && cx.added.length === 0);
+    check("goodbye written", cx.writes.some(t => t.includes("Okay, bye!")));
+  }
+
+  console.log("empty replies:");
+  {
+    // first reply empty, student asks again: new question must be answered (not the old one)
+    const { captured: ce } = boot(ctx0, mkApi({}), ["", "Built!\n\n===FILE: index.html===\n<p>pond</p>\n===END FILE==="],
+      ["make a frog page", "make a pond page"]);
+    await ce.cb();
+    check("empty first reply: friendly retry message", ce.writes.some(t => t.includes("didn't get an answer")));
+    check("never write empty/undefined", ce.writes.every(t => t.trim() !== "" && t !== "undefined"));
+    check("second ask carries the NEW question, only one message", ce.asks[1].messages.length === 1 && ce.asks[1].messages[0].content.includes("The student says: make a pond page") && !ce.asks[1].messages[0].content.includes("frog"));
+    check("no empty assistant turn ever sent", noEmptyAssistant(ce.asks));
+    const l = lastLog(ce);
+    check("failedReplies logged", l && l[0].failedReplies === 1);
+  }
+  {
+    // empty reply on a follow-up: user turn dropped, history clean
+    const { captured: cf } = boot(ctx0, mkApi({}), ["Hello there", "", "OK again"], ["a", "b", "c"]);
+    await cf.cb();
+    check("follow-up empty: no empty assistant", noEmptyAssistant(cf.asks));
+    check("follow-up empty: failed user turn removed", cf.asks.length === 3 && cf.asks[2].messages.length === 3 && !JSON.stringify(cf.asks[2].messages.slice(1)).includes('"b"'));
+    const { captured: cu } = boot(ctx0, mkApi({}), [undefined], ["x"]);
+    await cu.cb();
+    check("undefined result isn't shown as 'undefined'", cu.writes.every(t => t !== "undefined" && !t.includes("undefined")));
+  }
+  {
+    // empty continuation ends recovery, adds no empty turn, reports the file as not saved
+    const trunc = `Game!\n\n===FILE: index.html===\n<p>x</p>\n===END FILE===\n\n===FILE: script.js===\nconst a = docu`;
+    const { captured: cc } = boot(ctx0, mkApi({}), [trunc, "", "fine"], ["build", "thanks!"]);
+    await cc.cb();
+    check("empty continuation: one recovery ask then stop", cc.asks.length === 2);
+    check("empty continuation: reported not saved", cc.writes.some(t => t.includes("kept getting cut off") && t.includes("script.js")));
+    check("empty continuation: nothing empty in history", noEmptyAssistant(cc.asks));
+    check("empty continuation: partial never written", !cc.added.some(a => a.path === "script.js"));
+  }
+
+  console.log("files-changed note, write note, fingerprints:");
+  {
+    // Fixture file content flips after turn 2 (read at getContent time); boot()'s
+    // in-memory-FS wrapper stays in place so log read-backs work.
+    const api = mkApi({ "style.css": 1 }, { "style.css": () => (cn.asks.length >= 2 ? "h1{color:green}" : "h1{color:red}") });
+    const resp = (n) => `Turn ${n}.`;
+    const { captured: cn } = boot(ctx0, api, [resp(1), resp(2), resp(3), resp(4)], ["first", "second", "third", "fourth"]);
+    await cn.cb();
+    const userMsg = (i) => cn.asks[i].messages[cn.asks[i].messages.length - 1].content;
+    check("turn 2 (no change): no note", userMsg(1) === "second");
+    check("turn 3 (changed): note + raw input", userMsg(2) === "(Note: the student's files have changed since your last reply.)\n\nthird");
+    check("turn 4 (unchanged again): no note", userMsg(3) === "fourth");
+    check("refresh labels first question as old", cn.asks[1].messages[0].content.includes("The student's first question in this chat was: first") && !cn.asks[1].messages[0].content.includes("The student says:"));
+    check("first turn says 'The student says'", cn.asks[0].messages[0].content.includes("The student says: first"));
+    const l = lastLog(cn)[0];
+    check("contextFingerprints logged per turn", l.contextFingerprints.length === 4 && l.contextFingerprints.every(f => /^[0-9a-f]{8}$/.test(f.hash) && typeof f.len === "number"));
+    check("changed flags are [false,false,true,false]", l.contextFingerprints.map(f => f.changed).join() === "false,false,true,false");
+    check("questions log the raw input", l.questions.join("|") === "first|second|third|fourth");
+  }
+  {
+    // "last turn you wrote ..." note on the next message (and combined with files-changed)
+    const resp1 = "Built!\n\n===FILE: index.html===\n<p>a</p>\n===END FILE===\n\n===FILE: style.css===\np{}\n===END FILE===";
+    const { captured: cw } = boot(ctx0, mkApi({}), [resp1, "ok"], ["build it", "tweak it"]);
+    await cw.cb();
+    const um = cw.asks[1].messages[cw.asks[1].messages.length - 1].content;
+    check("write note names files written", um.startsWith("(Note: last turn you wrote index.html, style.css. Failed: none. Cut off by the length limit: none.)"));
+    check("write note followed by raw input", um.endsWith("tweak it"));
+  }
+
+  console.log("queueSave serializes:");
+  {
+    let inFlight = 0, maxInFlight = 0;
+    const api = mkApi({});
+    const { captured: cq } = boot(ctx0, api, ["a", "b", "c", "d"], ["1", "2", "3"]);
+    const capAdd = api.add;
+    api.add = async (p, content) => {
+      if (p === ".coach-log.json") {
+        inFlight++; maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise(r => setTimeout(r, 25));
+        inFlight--;
+      }
+      return capAdd(p, content);
+    };
+    await cq.cb();
+    check("never two log writes at once", maxInFlight === 1 && cq.added.filter(a => a.path === ".coach-log.json").length >= 3);
+  }
+
+  console.log("log read failure never wipes the log:");
+  {
+    const api = {
+      async getStructure() { return { ".coach-log.json": 1 }; },
+      async getContent(p) { throw new Error("transient"); },
+    };
+    const { captured: cl } = boot(ctx0, api, ["hi", "ok"], ["q1", "thanks"]);
+    // boot's in-memory fs would make getContent succeed after a write; assert nothing was ever written
+    await cl.cb();
+    check("conversation still works", cl.asks.length === 1);
+    check("log is not overwritten", !cl.added.some(a => a.path === ".coach-log.json"));
+  }
+
+  console.log("Not shown line:");
+  {
+    const big = "x".repeat(9000);
+    const api = mkApi(
+      { "a.md": 1, "b.md": 1, "c.md": 1, "d.md": 1, "index.html": 1, "bad.css": 1 },
+      { "a.md": big, "b.md": big, "c.md": big, "d.md": big, "index.html": "<p>SITE_BODY</p>", "bad.css": () => { throw new Error("nope"); } });
+    const { captured: cs } = boot(ctx0, api, ["ok"], ["build"]);
+    await cs.cb();
+    const m = cs.asks[0].messages[0].content;
+    check("site file read before big specs", m.includes("SITE_BODY"));
+    check("Not shown line lists unreadable and over-budget files", /Not shown \(too long to include, or couldn't be read\):[^\n]*bad\.css/.test(m) && /Not shown[^\n]*d\.md/.test(m));
+  }
+
+  console.log("blank input ignored:");
+  {
+    const { captured: cb } = boot(ctx0, mkApi({}), ["ok"], ["  ", "build", "   ", "  VERSION ", "thanks"]);
+    await cb.cb();
+    check("blank messages never reach ask(); version is trimmed", cb.asks.length === 1 && cb.writes.some(t => t.startsWith("Current version")));
+  }
+
+  console.log("round 2:");
+  {
+    // SF-1: getStructure reflects the coach's own writes; its own write must not trigger the changed note
+    const store = { ".keep": "" }; // non-empty map (S2)
+    const api = {
+      async getStructure() { const t = {}; for (const p of Object.keys(store)) t[p] = 1; return t; },
+      async getContent(p) { if (p in store) return store[p]; throw new Error("none"); },
+      async add(p, c) { store[p] = c; },
+      async deleteFiles(ps) { for (const p of ps) delete store[p]; },
+    };
+    const build = "Built!\n\n===FILE: index.html===\n<p>a</p>\n===END FILE===";
+    const { captured: c1 } = boot(ctx0, api, [build, "ok", "ok", "ok"], ["build it", "tweak it", "again", "once more"]);
+    // boot() replaces add/getContent with its own in-memory FS; mirror it into the store too
+    const bootAdd = api.add, bootGet = api.getContent;
+    api.add = async (p, c) => { store[p] = c; return bootAdd(p, c); };
+    api.getContent = async (p) => (p in store ? store[p] : bootGet(p));
+    await c1.cb();
+    const um = (i) => c1.asks[i].messages[c1.asks[i].messages.length - 1].content;
+    check("own write: write note but NO files-changed note", um(1).startsWith("(Note: last turn you wrote index.html.") && !um(1).includes("have changed"));
+    check("no note on a quiet turn", um(2) === "again");
+    const l = lastLog(c1)[0];
+    check("changed flags all false after own write", l.contextFingerprints.map(f => f.changed).join() === "false,false,false,false");
+    // student edit after a write DOES count
+    const { captured: c1b } = boot(ctx0, api, [build, "ok", "ok"], ["build it", "tweak it", "again"]);
+    const g2 = api.getContent;
+    api.getContent = async (p) => (p === "index.html" && c1b.asks.length >= 2 ? "<p>student edit</p>" : g2(p));
+    await c1b.cb();
+    const um2 = c1b.asks[2].messages[c1b.asks[2].messages.length - 1].content;
+    check("student edit after turn 2 still flagged", um2.startsWith("(Note: the student's files have changed since your last reply.)"));
+  }
+  {
+    // SF-2: continuation replies with prose but no file block
+    const trunc = "Game!\n\n===FILE: index.html===\n<p>x</p>\n===END FILE===\n\n===FILE: script.js===\nconst a = docu";
+    const { captured: c2 } = boot(ctx0, mkApi({}), [trunc, "Sorry, no file this time.", "ok"], ["build", "next"]);
+    await c2.cb();
+    check("lost file reported to the student", c2.writes.some(t => t.includes("kept getting cut off") && t.includes("script.js")));
+    const um = c2.asks[2].messages[c2.asks[2].messages.length - 1].content;
+    check("write note lists script.js as cut off", um.includes("Cut off by the length limit: script.js"));
+    check("filesLostToLengthLimit === 1", lastLog(c2)[0].filesLostToLengthLimit === 1);
+  }
+  {
+    // NIT-2/3: over-cap files appear in the write note
+    let r = "Many!\n\n";
+    for (let i = 1; i <= 9; i++) r += `===FILE: f${i}.js===\nvar a${i}=1;\n===END FILE===\n\n`;
+    const { captured: c3 } = boot(ctx0, mkApi({}), [r, "ok"], ["build", "next"]);
+    await c3.cb();
+    const um = c3.asks[1].messages[c3.asks[1].messages.length - 1].content;
+    check("over-cap file in write note", um.includes("Not saved (too many files): f9.js"));
+  }
+  {
+    // S4: a transient getStructure()/getContext() failure on a REFRESH keeps the old context
+    for (const mode of ["structure", "context"]) {
+      const api = mkApi({ "a.html": 1 }, { "a.html": "<p>SITE</p>" });
+      let capRef = null, failedOnce = false;
+      const ctx = { files: [], guidesPage: { content: "REAL GUIDE" }, assignmentData: null };
+      Object.defineProperty(ctx, "guidesPage", { get() { if (mode === "context" && capRef && capRef.asks.length === 1 && !failedOnce) { failedOnce = true; throw new Error("ctx down"); } return { content: "REAL GUIDE" }; } });
+      const { captured: c4 } = boot(ctx, api, ["one", "two", "three"], ["q1", "q2", "q3"]);
+      capRef = c4;
+      const orig = api.getStructure;
+      api.getStructure = async () => { if (mode === "structure" && c4.asks.length === 1 && !failedOnce) { failedOnce = true; throw new Error("boom"); } return orig(); };
+      await c4.cb();
+      const l = lastLog(c4)[0];
+      const m1 = c4.asks[1].messages[0].content;
+      check(mode + " refresh failure: old context kept", m1.includes("<p>SITE</p>") && m1.includes("REAL GUIDE") && !m1.includes("paste their spec"));
+      check(mode + " refresh failure: logged as refreshFailed, one entry per turn", l.contextFingerprints.length === 3 && l.contextFingerprints[1].refreshFailed === true && l.contextFingerprints[1].hash === null);
+      check(mode + " refresh failure: no spurious files-changed flags", l.contextFingerprints.every(f => f.changed === false));
+      const u2 = c4.asks[2].messages[c4.asks[2].messages.length - 1].content;
+      check(mode + " refresh failure: no note on the next turn", u2 === "q3");
+    }
+  }
+  {
+    // S2: both log reads fail and getStructure() returns an EMPTY map -> never write the log
+    const api = { async getStructure() { return {}; }, async getContent() { throw new Error("transient"); } };
+    const { captured: cz } = boot(ctx0, api, ["hi"], ["q1"]);
+    // boot's FS wrapper would serve written files back; nothing must be written
+    await cz.cb();
+    check("empty structure map + failed reads: log not written", !cz.added.some(a => a.path === ".coach-log.json"));
+  }
+  {
+    const { captured: c5 } = boot({ get files() { return []; }, guidesPage: null, assignmentData: null }, mkApi({ "a.html": 1 }, { "a.html": "<p>x</p>" }), ["one", "", "three"], ["q1", "q2", "q3"]);
+    // empty reply on turn 2: turn 3 (retry) is not "changed" and baseline wasn't advanced wrongly
+    await c5.cb();
+    check("retry after empty reply works", c5.asks.length === 3);
+  }
+  {
+    const api = mkApi({ "a.html": 1, "b.css": 1, "e.js": 1, "n.js": 1 }, { "a.html": "<p>hi</p>", "b.css": "", "e.js": "y".repeat(9000), "n.js": () => 42 });
+    const { captured: c7 } = boot(ctx0, api, ["ok"], ["build"]);
+    await c7.cb();
+    const m = c7.asks[0].messages[0].content;
+    check("empty file shown as (empty file)", /--- Current site files — b\.css ---\n\(empty file\)/.test(m));
+    check("capped file marked, not on Not shown", m.includes("(cut off after 8000 characters)") && !/Not shown[^\n]*e\.js/.test(m));
+    check("non-string read is Not shown", /Not shown[^\n]*n\.js/.test(m));
+    const iA = m.indexOf("— a.html"), iB = m.indexOf("— b.css"), iE = m.indexOf("— e.js");
+    check("files displayed sorted by path", iA > 0 && iA < iB && iB < iE);
+  }
+  {
+    // R5: a throwing getContext / hung context doesn't kill the first turn
+    const captured = { asks: [], writes: [] };
+    const codioIDE = { coachBot: { register(i, l, cb) { captured.cb = cb; }, async getContext() { throw new Error("no ctx"); },
+      async input() { captured.n = (captured.n || 0) + 1; if (captured.n === 1) return "build a page"; throw new Error("x"); },
+      async ask(p) { captured.asks.push(p); return { result: "Sure." }; }, write(t) { captured.writes.push(t); }, showMenu() {}, showThinkingAnimation() {}, hideThinkingAnimation() {}, MESSAGE_ROLES: { ASSISTANT: "a" } }, files: undefined };
+    new Function("window", src)({ codioIDE });
+    await captured.cb();
+    check("answers even when context can't be read", captured.asks.length === 1 && (captured.asks[0].messages[0].content.includes("couldn't read") || captured.asks[0].messages[0].content.includes("could not be read")));
+  }
+  {
+    // R5: recovery path logs the question before building; failed build can't drop it
+    const captured = { asks: [], writes: [], added: [], fs: {} };
+    let n = 0, ctxFail = false;
+    const files = { async getStructure() { return { ".keep": 1 }; }, async getContent(p) { if (p in captured.fs) return captured.fs[p]; throw new Error("none"); },
+      async add(p, c) { captured.fs[p] = c; captured.added.push({ path: p, content: c }); }, async deleteFiles(ps) { ps.forEach(p => delete captured.fs[p]); } };
+    const inputs = ["q1", "q2"];
+    const codioIDE = { coachBot: { register(i, l, cb) { captured.cb = cb; }, async getContext() { if (ctxFail) throw new Error("x"); return { files: [], guidesPage: null, assignmentData: null }; },
+      async input() { if (n < inputs.length) return inputs[n++]; throw new Error("x"); },
+      async ask(p) { captured.asks.push(JSON.parse(JSON.stringify(p))); return { result: captured.asks.length === 1 ? "" : "ok" }; },
+      write(t) { captured.writes.push(t); }, showMenu() {}, showThinkingAnimation() {}, hideThinkingAnimation() {}, MESSAGE_ROLES: { ASSISTANT: "a" } }, files };
+    const origInput = codioIDE.coachBot.input;
+    codioIDE.coachBot.input = async () => { const v = await origInput(); if (v === "q2") ctxFail = true; return v; };
+    new Function("window", src)({ codioIDE });
+    await captured.cb();
+    const adds = captured.added.filter(a => a.path === ".coach-log.json");
+    const lg = JSON.parse(adds[adds.length - 1].content)[0];
+    check("recovery: question logged, fallback context used", lg.questions.join("|") === "q1|q2" && captured.asks[1].messages[0].content.includes("The student says: q2"));
   }
 
   console.log(failures === 0 ? "\nALL TESTS PASSED" : `\n${failures} FAILURE(S)`);
