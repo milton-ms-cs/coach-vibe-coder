@@ -553,6 +553,79 @@ Next, you could spec a footer!`;
     check("recovery: question logged, fallback context used", lg.questions.join("|") === "q1|q2" && captured.asks[1].messages[0].content.includes("The student says: q2"));
   }
 
+  console.log("assignment context (.guides/coach-context.md):");
+  {
+    const NOTES = "Use plain HTML, CSS and JS only. Keep scores in localStorage.";
+    const ctxN = { files: [], guidesPage: { content: "GUIDE" }, assignmentData: null };
+    const build = "Built!\n\n===FILE: index.html===\n<p>x</p>\n===END FILE===";
+    const withNotes = (n) => mkApi({ "index.html": 1, ".guides": { "coach-context.md": 1 } }, { "index.html": "<p>x</p>", ".guides/coach-context.md": n });
+    const noFeature = mkApi({ "index.html": 1 }, { "index.html": "<p>x</p>" });
+    const inputsN = ["build it", "bigger header", "thanks!"];
+    const { captured: cP } = boot(ctxN, withNotes(NOTES), [build, "ok", "ok"], inputsN);
+    await cP.cb();
+    const blk = "Notes from the teacher for this assignment (follow these; the student can't see them):\n<assignment_context>\n" + NOTES + "\n</assignment_context>\n";
+    const ws0 = cP.asks[0].messages[0].content;
+    check("present: block in messages[0] on first turn", ws0.includes(blk));
+    check("present: block in messages[0] on follow-up", cP.asks[1].messages[0].content.includes(blk));
+    check("present: block sits after </guide>, outside <workspace>",
+      ws0.indexOf("</guide>") < ws0.indexOf("<assignment_context>") && !ws0.split("</workspace>")[0].includes("assignment_context"));
+    check("present: not shown as a spec doc in workspace", !ws0.split("</workspace>")[0].includes("coach-context"));
+    check("present: system prompt has the notes section", cP.asks[0].systemPrompt.includes("## Notes from the teacher"));
+
+    const { captured: cM } = boot(ctxN, noFeature, [build, "ok", "ok"], inputsN);
+    await cM.cb();
+    check("missing: no block", cM.asks.every(a => !a.messages[0].content.includes("assignment_context")));
+    const all = (c) => c.asks.map(a => a.messages[0].content).join("\n--\n");
+    const { captured: cE } = boot(ctxN, withNotes("  \n \n"), [build, "ok", "ok"], inputsN);
+    await cE.cb();
+    check("empty file: byte-identical to missing", all(cE) === all(cM));
+    check("fingerprints unchanged by the notes", JSON.stringify(lastLog(cM)[0].contextFingerprints) === JSON.stringify(lastLog(cP)[0].contextFingerprints));
+
+    const { captured: cB } = boot(ctxN, withNotes("A".repeat(5000)), [build, "ok"], ["build it", "thanks!"]);
+    await cB.cb();
+    const bm = cB.asks[0].messages[0].content;
+    check("over cap: cut at 4000 with a marker", bm.includes("(teacher notes cut off here)") && !bm.includes("A".repeat(4001)) && bm.includes("A".repeat(3900)));
+
+    let reads = 0;
+    const counting = withNotes(NOTES);
+    const origGC = counting.getContent;
+    counting.getContent = async (p) => { if (p === ".guides/coach-context.md") reads++; return origGC(p); };
+    const { captured: cC } = boot(ctxN, counting, [build, "ok", "ok"], inputsN);
+    await cC.cb();
+    check("read once per session", reads === 1);
+
+    let mreads = 0;
+    const missing = mkApi({ "index.html": 1 }, { "index.html": "<p>x</p>" });
+    const origM = missing.getContent;
+    missing.getContent = async (p) => { if (p === ".guides/coach-context.md") mreads++; return origM(p); };
+    const { captured: cMi } = boot(ctxN, missing, [build, "ok", "ok"], inputsN);
+    await cMi.cb();
+    check("definitely missing: one read per session", mreads === 1);
+
+    // a throw on turn 1 then success: notes appear on turn 2
+    let tcalls = 0;
+    const flaky = withNotes(NOTES);
+    const origF = flaky.getContent;
+    flaky.getContent = async (p) => { if (p === ".guides/coach-context.md" && tcalls++ === 0) throw new Error("blip"); return origF(p); };
+    const { captured: cF } = boot(ctxN, flaky, [build, "ok", "ok"], inputsN);
+    await cF.cb();
+    check("throw on turn 1: no block then", !cF.asks[0].messages[0].content.includes("assignment_context"));
+    check("throw on turn 1: notes appear on turn 2", cF.asks[1].messages[0].content.includes(blk));
+
+    const trunc = "Game!\n\n===FILE: index.html===\n<p>x</p>\n===END FILE===\n\n===FILE: script.js===\nconst a = docu";
+    const { captured: cR } = boot(ctxN, withNotes(NOTES), [trunc, "===FILE: script.js===\nconst a = 1;\n===END FILE===", "ok"], ["build", "thanks!"]);
+    await cR.cb();
+    check("recovery ask includes the notes", cR.asks.length >= 2 && cR.asks[1].messages[0].content.includes("<assignment_context>"));
+
+    // hung read: coach still answers (uses the real 8s timeout)
+    const hung = withNotes(NOTES);
+    const origGC2 = hung.getContent;
+    hung.getContent = (p) => p === ".guides/coach-context.md" ? new Promise(() => {}) : origGC2(p);
+    const { captured: cH2 } = boot(ctxN, hung, [build], ["build it", "thanks!"]);
+    await cH2.cb();
+    check("hung read: coach still answers, no block", cH2.asks.length === 1 && !cH2.asks[0].messages[0].content.includes("assignment_context"));
+  }
+
   console.log(failures === 0 ? "\nALL TESTS PASSED" : `\n${failures} FAILURE(S)`);
   process.exit(failures === 0 ? 0 : 1);
 })().catch(e => { console.error(e); process.exit(1); });

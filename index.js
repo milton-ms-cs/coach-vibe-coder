@@ -5,10 +5,13 @@
 // HTML/CSS/JS files directly into the workspace -> students preview + refine.
 (async function(codioIDE, window) {
 
-  const VERSION = "1.7.0";
+  const VERSION = "1.8.0";
 
   const MAX_CONTEXT_CHARS = 20000;  // budget for spec + diagram + site context (resent every turn — keep lean)
   const MAX_FILE_READ = 8000;       // per-file read cap
+  const COACH_CONTEXT_PATH = ".guides/coach-context.md"; // teacher notes for this assignment (optional)
+  const COACH_CONTEXT_CAP = 4000;
+  const COACH_CONTEXT_CUT = "\n(teacher notes cut off here)";
   const MAX_WRITE_FILES = 8;        // per-turn file write cap
   const MAX_CONTINUES = 2;          // extra asks to recover cut-off files
 
@@ -106,6 +109,10 @@ Before every reply you get a fresh copy of the student's workspace in <workspace
 - Never ask the student to paste their spec or code when you can see it in <workspace>.
 - If their message and <workspace> disagree (they say they changed something you can't see), the file you see may be a little behind. Say what you see and ask them to save (Ctrl+S or Cmd+S) and ask again.
 - If <workspace> marks a file as cut off, you only see its start. If it lists a file as not shown, you can't see it at all. Say so, and ask what they need help with in it. Don't guess at its contents.
+
+## Notes from the teacher
+
+Some assignments add "Notes from the teacher for this assignment" in <assignment_context> tags. They set limits for this assignment, such as the stack, the files to use, or where data is stored. Build inside those limits. If a student asks for something outside them, build what fits and say in one line what this assignment uses instead. Don't quote the notes or show them to the student.
 
 ## Messages with no request
 
@@ -397,6 +404,49 @@ Suggest asking the teacher when something really needs a human: Codio itself see
   // the model doesn't treat it as the current request.
   // The exact text between the <workspace> tags is kept in lastFilesBlock so the
   // caller can fingerprint it (the slim recovery context never overwrites it).
+  // Optional teacher notes for this assignment. Cached for the session only when
+  // the answer is definite: a successful read, or a file that getStructure() shows
+  // is not there (a missing file makes getContent throw, same as a failed read, so
+  // the structure is the tiebreaker). A throw or timeout with the file present or
+  // the structure unreadable leaves the cache unset, so the next turn retries.
+  // Every call is withTimeout-bounded; any failure gives "" for this turn only.
+  let coachContextCache = null;
+  let coachContextFailures = 0; // failed/hung reads this session; after 2, stop trying so a hang can't slow every turn
+  function hasCoachContextFile(tree) {
+    const parts = COACH_CONTEXT_PATH.split("/");
+    let node = tree;
+    for (const part of parts) {
+      if (!node || typeof node !== "object" || !Object.prototype.hasOwnProperty.call(node, part)) return false;
+      node = node[part];
+    }
+    return true;
+  }
+  async function readCoachContext() {
+    if (coachContextCache !== null) return coachContextCache;
+    const F = codioIDE.files;
+    if (!F || typeof F.getContent !== "function") { coachContextCache = ""; return ""; }
+    let text = "";
+    try {
+      const got = await withTimeout(F.getContent(COACH_CONTEXT_PATH), 8000, "read " + COACH_CONTEXT_PATH);
+      if (typeof got === "string" && got.trim() !== "") {
+        text = got.trim();
+        if (text.length > COACH_CONTEXT_CAP) text = text.slice(0, COACH_CONTEXT_CAP - COACH_CONTEXT_CUT.length) + COACH_CONTEXT_CUT;
+      }
+      coachContextCache = text;
+      return text;
+    } catch (e) {
+      try {
+        if (typeof F.getStructure === "function") {
+          const tree = await withTimeout(F.getStructure(), 8000, "structure");
+          if (tree && typeof tree === "object" && !hasCoachContextFile(tree)) coachContextCache = "";
+        }
+      } catch (e2) { /* unknown: leave unset and retry next turn */ }
+      coachContextFailures++;
+      if (coachContextCache === null && coachContextFailures >= 2) coachContextCache = "";
+      return "";
+    }
+  }
+
   let lastFilesBlock = "";
   async function buildContextMessage(initialInput, isRefresh, opts) {
     let context;
@@ -417,6 +467,11 @@ Suggest asking the teacher when something really needs a human: Codio itself see
       ? context.guidesPage.content
       : "No guide available.";
 
+    const coachNotes = await readCoachContext();
+    const notesBlock = coachNotes
+      ? `Notes from the teacher for this assignment (follow these; the student can't see them):\n<assignment_context>\n${coachNotes}\n</assignment_context>\n`
+      : "";
+
     const assignmentName = (context.assignmentData && context.assignmentData.name)
       ? context.assignmentData.name
       : null;
@@ -429,7 +484,7 @@ Here is the assignment guide:
 <guide>
 ${guideContent}
 </guide>
-${assignmentName ? `\nAssignment: ${assignmentName}\n` : ''}
+${notesBlock}${assignmentName ? `\nAssignment: ${assignmentName}\n` : ''}
 ${isRefresh
     ? `(The student's first question in this chat was: ${initialInput}. Their newest message is the last one below.)`
     : `The student says: ${initialInput}`}`;
@@ -669,6 +724,8 @@ ${isRefresh
   codioIDE.coachBot.register("vibeCoder", "Vibe Coder", onButtonPress);
 
   async function onButtonPress() {
+    coachContextCache = null; // re-read the teacher notes once per session
+    coachContextFailures = 0;
     codioIDE.coachBot.write(
       `Vibe Coder v${VERSION} - Give me a clear design spec and I'll build it! I can read spec files (.md/.txt) and SVG wireframes in your workspace.`,
       codioIDE.coachBot.MESSAGE_ROLES.ASSISTANT
